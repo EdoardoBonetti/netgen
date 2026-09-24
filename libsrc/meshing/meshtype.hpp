@@ -1521,6 +1521,8 @@ inline ostream & operator<<(ostream  & s, const MiniElement2dT<TINDEX> & el)
   EdgePointGeomInfo epgeominfo[2]; // combines PointGeomInfo + dist
   /// 1-based edge descriptor index into mesh.Regions<1>() (INVALID = 0)
   EdgeRegionIndex index = EdgeRegionIndex::INVALID;
+  /// marked for refinement (used by 1D adaptive bisection)
+  bool refflag = false;
 
   public:
     ///
@@ -1546,6 +1548,9 @@ inline ostream & operator<<(ostream  & s, const MiniElement2dT<TINDEX> & el)
 
     EdgeRegionIndex GetIndex() const { return index; }
     void SetIndex (EdgeRegionIndex i) { index = i; }
+
+    void SetRefinementFlag (bool rflag = true) { refflag = rflag; }
+    bool TestRefinementFlag () const { return refflag; }
 
     void DoArchive (Archive & ar);
 #ifdef PARALLEL

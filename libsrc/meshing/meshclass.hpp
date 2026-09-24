@@ -269,6 +269,8 @@ namespace netgen
     Array<ElementIndex, ElementIndex> mlparentelement;
     /// parent element of surface element
     Array<SurfaceElementIndex, SurfaceElementIndex> mlparentsurfaceelement;
+    /// parent segment of segment (1D adaptive bisection)
+    Array<SegmentIndex, SegmentIndex> mlparentsegment;
 
 
 

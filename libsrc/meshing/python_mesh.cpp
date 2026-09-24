@@ -682,6 +682,8 @@ DLL_HEADER void ExportNetgenMeshing(py::module &m)
                   {
                     self.SetIndex(EdgeRegionIndex::FromNr1(index));
                   })
+    .def_property("refine", &Segment::TestRefinementFlag, &Segment::SetRefinementFlag,
+                  "refinement flag for 1D adaptive bisection (Mesh.Refine(adaptive=True))")
     .def_property("edgenr",
                   [](const Segment & self) -> int
                   {

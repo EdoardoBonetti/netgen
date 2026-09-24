@@ -733,6 +733,11 @@ namespace netgen
         if (ei < mesh->mlparentelement.Size())
           return mesh->mlparentelement[ElementIndex::FromNr0(ei)].Nr0();
       }
+    else if (mesh->GetDimension() == 1)
+      {
+        if (ei < mesh->mlparentsegment.Size())
+          return mesh->mlparentsegment[SegmentIndex::FromNr0(ei)].Nr0();
+      }
     else
       {
         if (ei < mesh->mlparentsurfaceelement.Size())
@@ -1101,6 +1106,12 @@ namespace netgen
 
 
   
+  template <>
+  DLL_HEADER void Ngx_Mesh :: SetRefinementFlag<1> (size_t elnr, bool flag)
+  {
+    (*mesh)[SegmentIndex::FromNr1(elnr+1)].SetRefinementFlag(flag);
+  }
+
   template <>
   DLL_HEADER void Ngx_Mesh :: SetRefinementFlag<2> (size_t elnr, bool flag)
   {

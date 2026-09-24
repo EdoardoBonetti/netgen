@@ -2745,10 +2745,102 @@ namespace netgen
 
 
 
-  void Refinement :: Bisect (Mesh & mesh, 
+  /*
+    Adaptive bisection of a 1D mesh (segments are the volume elements).
+    Every segment carrying a refinement flag is split at its midpoint; no
+    closure iteration is needed since a 1D mesh cannot have hanging nodes.
+    The bookkeeping mirrors the 2D/3D bisection so that NGSolve's
+    prolongation works unchanged: the first child replaces the parent in
+    place, the second child is appended and mlparentsegment records its
+    parent, mlbetweennodes records the two parent vertices of every new
+    point, and level_nv gets the new vertex count.
+  */
+  static void Bisect1D (Mesh & mesh, const NetgenGeometry & geo)
+  {
+    PrintMessage (3, "Bisect 1D mesh");
+    mesh.SetNextMajorTimeStamp();
+
+    // reduce 2nd order, as in Refinement::Refine
+    mesh.ComputeNVertices();
+    mesh.SetNP (mesh.GetNV());
+
+    if (mesh.mlbetweennodes.Size() < mesh.GetNV())
+      {
+        mesh.mlbetweennodes.SetSize (mesh.GetNV());
+        mesh.mlbetweennodes = PointIndices<2>(PointIndex::INVALID, PointIndex::INVALID);
+      }
+    if (mesh.level_nv.Size() == 0)
+      mesh.level_nv.Append (mesh.GetNV());
+
+    int nseg = mesh.GetNSeg();
+    if (mesh.mlparentsegment.Size() < nseg)
+      {
+        int oldsize = mesh.mlparentsegment.Size();
+        mesh.mlparentsegment.SetSize (nseg);
+        for (int i = oldsize; i < nseg; i++)
+          mesh.mlparentsegment[SegmentIndex::FromNr0(i)] = SegmentIndex::INVALID;
+      }
+
+    Array<std::pair<PointIndex, PointIndices<2>>> newpoints;
+    int cnt = 0;
+    // only the segments present on entry; children are appended behind them
+    for (SegmentIndex si : T_Range<SegmentIndex>(nseg))
+      {
+        Segment seg = mesh[si];    // copy: AddSegment below may reallocate
+        if (!seg.TestRefinementFlag()) continue;
+        cnt++;
+
+        Point<3> pnew;
+        EdgePointGeomInfo ngi;
+        // hand-built 1D meshes may carry a segment index without an edge
+        // region descriptor; fall back to the plain midpoint then
+        if (seg.GetIndex().IsValid() && seg.GetIndex().Nr0() < mesh.GetNRegions(1))
+          {
+            const auto & ed = mesh.GetEdgeDescriptor(seg.GetIndex());
+            geo.PointBetweenEdge (mesh.Point(seg[0]), mesh.Point(seg[1]), 0.5,
+                                  ed.SurfNr(0), ed.SurfNr(1),
+                                  seg.EPGeomInfo(0), seg.EPGeomInfo(1),
+                                  pnew, ngi, ed.EdgeNr());
+          }
+        else
+          {
+            pnew = Center (mesh.Point(seg[0]), mesh.Point(seg[1]));
+            ngi.dist = 0.5 * (seg.EPGeomInfo(0).dist + seg.EPGeomInfo(1).dist);
+          }
+        PointIndex pinew = mesh.AddPoint (pnew);
+        newpoints.Append ({pinew, PointIndices<2>(seg[0], seg[1])});
+
+        Segment ns1 = seg, ns2 = seg;
+        ns1[1] = pinew;  ns1.EPGeomInfo(1) = ngi;
+        ns2[0] = pinew;  ns2.EPGeomInfo(0) = ngi;
+        ns1.SetRefinementFlag (false);
+        ns2.SetRefinementFlag (false);
+
+        mesh[si] = ns1;
+        mesh.AddSegment (ns2);
+        mesh.mlparentsegment.Append (si);
+      }
+
+    mesh.mlbetweennodes.SetSize (mesh.GetNP());
+    for (auto & [pi, parents] : newpoints)
+      mesh.mlbetweennodes[pi] = parents;
+
+    mesh.ComputeNVertices();
+    mesh.level_nv.Append (mesh.GetNV());
+    PrintMessage (3, "bisected ", cnt, " segments");
+  }
+
+
+  void Refinement :: Bisect (Mesh & mesh,
                              BisectionOptions & opt,
                              Array<double, ElementIndex> * quality_loss) const
   {
+    if (mesh.GetDimension() == 1)
+      {
+        Bisect1D (mesh, geo);
+        return;
+      }
+
     PrintMessage(1,"Mesh bisection");
     PushStatus("Mesh bisection");
 
