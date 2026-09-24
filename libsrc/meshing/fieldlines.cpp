@@ -9,6 +9,14 @@
 
 namespace netgen
 {
+  // Along a field line the next point is almost always inside the element we
+  // just left, or one next to it. Test that element first: a hit costs one
+  // PointContainedIn3DElement, a miss falls back to the search tree (which
+  // also allocates). Mesh::SetPointSearchStartElement looks like it does this
+  // already, but ps_startelement is never read by the search.
+  inline int GetVolElementHinted(const Mesh& mesh, const Point<3>& p,
+                                 double* lami, int hint);
+
   inline int GetVolElement(const Mesh& mesh, const Point<3>& p,
                            double* lami)
   {
@@ -26,6 +34,18 @@ namespace netgen
           return -1;
         return ei.Nr0();
       }
+  }
+
+  inline int GetVolElementHinted(const Mesh& mesh, const Point<3>& p,
+                                 double* lami, int hint)
+  {
+    if(hint >= 0 && mesh.GetDimension() == 3)
+      {
+        ElementIndex ei = ElementIndex::FromNr0(hint);
+        if(mesh.PointContainedIn3DElement(p, lami, ei))
+          return hint;
+      }
+    return GetVolElement(mesh, p, lami);
   }
 
   RKStepper :: ~RKStepper() 
@@ -189,16 +209,11 @@ namespace netgen
 
   void FieldLineCalc :: GenerateFieldLines(Array<Point<3>> & potential_startpoints, const int numlines)
   {
-
-    
-    Array<Point<3>> line_points;
-    Array<double> line_values;
-    Array<bool> drawelems;
-    Array<int> dirstart;
     pstart.SetSize0();
     pend.SetSize0();
     values.SetSize0();
 
+    const int nstart = potential_startpoints.Size();
     double crit = 1.0;
 
     if(randomized)
@@ -206,15 +221,15 @@ namespace netgen
         double sum = 0;
         double lami[3];
         Vec<3> v;
-        
-        for(int i=0; i<potential_startpoints.Size(); i++)
+        int hint = -1;
+
+        for(int i=0; i<nstart; i++)
           {
-            int elnr = GetVolElement(mesh, potential_startpoints[i], lami);
+            int elnr = GetVolElementHinted(mesh, potential_startpoints[i], lami, hint);
             if (elnr == -1)
               continue;
+            hint = elnr;
 
-            mesh.SetPointSearchStartElement(elnr);
-            
             func(elnr, lami, v);
             sum += v.Length();
           }
@@ -222,34 +237,69 @@ namespace netgen
         crit = sum/double(numlines);
       }
 
+    // Draw every threshold up front, in the original order, so the result
+    // does not depend on how the work is distributed over threads.
+    Array<double> crit_values(nstart);
+    for(int i=0; i<nstart; i++)
+      crit_values[i] = randomized ? (double(rand())/RAND_MAX)*crit : critical_value;
+
+    // Lines are independent, so trace them in parallel. Work is done in
+    // chunks and merged in index order: the output is identical to the
+    // sequential version, and we stop as soon as numlines lines are usable
+    // instead of tracing every candidate.
+    const int nthreads = max(1, ngcore::TaskManager::GetNumThreads());
+    const int chunk = max(1, 4*nthreads);
+
+    Array<Array<Point<3>>> chunk_pstart(chunk), chunk_pend(chunk);
+    Array<Array<double>> chunk_values(chunk);
 
     int calculated = 0;
 
-    for(int i=0; i<potential_startpoints.Size(); i++)
+    for(int base = 0; base < nstart && calculated < numlines; base += chunk)
       {
-        if(randomized)
-          SetCriticalValue((double(rand())/RAND_MAX)*crit);
+        const int n = min2(chunk, nstart-base);
 
-        if(calculated >= numlines) break;
+        ngcore::ParallelFor(n, [&](size_t k)
+          {
+            chunk_pstart[k].SetSize0();
+            chunk_pend[k].SetSize0();
+            chunk_values[k].SetSize0();
 
-        Calc(potential_startpoints[i],line_points,line_values,drawelems,dirstart);
+            RKStepper stepper(rk_type);
+            stepper.SetTolerance(tolerance);
 
-        bool usable = false;
+            Array<Point<3>> line_points;
+            Array<double> line_values;
+            Array<bool> drawelems;
+            Array<int> dirstart;
 
-        for(int j=1; j<dirstart.Size(); j++)
-          for(int k=dirstart[j-1]; k<dirstart[j]-1; k++)
-            {
-              if(!drawelems[k] || !drawelems[k+1]) continue;
-             
-              usable = true;
-              pstart.Append(line_points[k]);
-              pend.Append(line_points[k+1]);
-              values.Append( 0.5*(line_values[k]+line_values[k+1]) );
-            }
+            Calc(potential_startpoints[base+k], line_points, line_values,
+                 drawelems, dirstart, stepper, crit_values[base+k]);
 
-        if(usable) calculated++;
+            for(int j=1; j<dirstart.Size(); j++)
+              for(int l=dirstart[j-1]; l<dirstart[j]-1; l++)
+                {
+                  if(!drawelems[l] || !drawelems[l+1]) continue;
+
+                  chunk_pstart[k].Append(line_points[l]);
+                  chunk_pend[k].Append(line_points[l+1]);
+                  chunk_values[k].Append( 0.5*(line_values[l]+line_values[l+1]) );
+                }
+          });
+
+        for(int k = 0; k < n && calculated < numlines; k++)
+          {
+            if(chunk_pstart[k].Size() == 0) continue;
+
+            for(auto l : Range(chunk_pstart[k]))
+              {
+                pstart.Append(chunk_pstart[k][l]);
+                pend.Append(chunk_pend[k][l]);
+                values.Append(chunk_values[k][l]);
+              }
+            calculated++;
+          }
       }
-    
   }
 
 
@@ -273,7 +323,9 @@ namespace netgen
     auxtolerance *= 2.*rad;
 
     stepper.SetTolerance(auxtolerance);
-    
+    this->rk_type = rk_type;
+    this->tolerance = auxtolerance;
+
     direction = adirection;
     
     
@@ -298,6 +350,15 @@ namespace netgen
   
   void FieldLineCalc :: Calc(const Point<3> & startpoint, Array<Point<3>> & points, Array<double> & vals, Array<bool> & drawelems, Array<int> & dirstart)
   {
+    Calc(startpoint, points, vals, drawelems, dirstart, stepper, critical_value);
+  }
+
+  // Re-entrant: the stepper and the critical value are arguments, and no
+  // mesh state is written, so several lines can be traced at once.
+  void FieldLineCalc :: Calc(const Point<3> & startpoint, Array<Point<3>> & points, Array<double> & vals,
+                             Array<bool> & drawelems, Array<int> & dirstart,
+                             RKStepper & stepper, double crit_value) const
+  {
     Vec<3> v = 0.0;
     double startlami[3] = {0.0, 0.0, 0.0};
     
@@ -309,18 +370,16 @@ namespace netgen
     dirstart.Append(0);
 
     int startelnr = GetVolElement(mesh, startpoint,startlami);
-    (*testout) << "p = " << startpoint << "; elnr = " << startelnr << endl;
     if (startelnr == -1)
       return;
       
-    mesh.SetPointSearchStartElement(startelnr);
 
     Vec<3> startv;
     bool startdraw = func(startelnr, startlami, startv);
 
     double startval = startv.Length();
 
-    if(critical_value > 0 && fabs(startval) < critical_value)
+    if(crit_value > 0 && fabs(startval) < crit_value)
       return;
 
     //cout << "p = " << startpoint << "; elnr = " << startelnr << endl;
@@ -348,7 +407,6 @@ namespace netgen
           {
             if(v.Length() < 1e-12*rad)
               {
-                (*testout) << "Current fieldlinecalculation came to a stillstand at " << points.Last() << endl;
                 break;
               }
 
@@ -360,10 +418,9 @@ namespace netgen
             Point<3> newp;
             while(!stepper.GetNextData(newp,dummyt,h) && elnr != -1)
               {
-                elnr = GetVolElement(mesh, newp, lami);
+                elnr = GetVolElementHinted(mesh, newp, lami, elnr);
                 if(elnr != -1)
                   {
-                    mesh.SetPointSearchStartElement(elnr);
                     drawelem = func(elnr, lami, v);
                     if(dir == -1) v *= -1.;
                     stepper.FeedNextF(v);
@@ -379,9 +436,6 @@ namespace netgen
             points.Append(newp);
             vals.Append(v.Length());
             drawelems.Append(drawelem);
-
-            if(points.Size() % 40 == 0 && points.Size() > 1)
-              (*testout) << "Points in current fieldline: " << points.Size() << ", current position: " << newp << endl;
 
             if(maxpoints > 0 && points.Size() >= maxpoints)
               {

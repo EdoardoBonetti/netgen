@@ -58,6 +58,11 @@ private:
   const VectorFunction & func;
   RKStepper stepper;
 
+  // remembered so that each thread can build its own stepper: RKStepper
+  // carries the state of one integration and cannot be shared
+  int rk_type;
+  double tolerance;
+
   Array<double> values;
   Array<Point<3>> pstart, pend;
 
@@ -89,6 +94,12 @@ public:
   void NotRandomized(void) { randomized = false; }
 
   DLL_HEADER void Calc(const Point<3> & startpoint, Array<Point<3>> & points, Array<double> & vals, Array<bool> & drawelems, Array<int> & dirstart);
+
+  // re-entrant form: all mutable state (stepper, critical value) is passed
+  // in, so field lines can be traced in parallel
+  DLL_HEADER void Calc(const Point<3> & startpoint, Array<Point<3>> & points, Array<double> & vals,
+                       Array<bool> & drawelems, Array<int> & dirstart,
+                       RKStepper & stepper, double crit_value) const;
 
   DLL_HEADER void GenerateFieldLines(Array<Point<3>> & potential_startpoints, const int numlines);
 
