@@ -3608,39 +3608,28 @@ namespace netgen
                   PointGeomInfo gi1 = oldtri.pgeominfo[(oldtri.markededge+1)%3];
                   PointGeomInfo gi2 = oldtri.pgeominfo[(oldtri.markededge+2)%3];
 
-                  static Timer t_tr_hash("Bisect trigs: hash+AddPoint");
-                  static Timer t_tr_geo("Bisect trigs: geometry");
-                  static Timer t_tr_bis("Bisect trigs: bisect+append");
                   if (cutedges.Used (edge))
                     {
                       newp = cutedges.Get(edge);
                       npgi.u = 0.5*(gi1.u + gi2.u);
                       npgi.v = 0.5*(gi1.v + gi2.v);
-                      t_tr_geo.Start();
                       geo.ProjectPointGI (si, mesh[newp], npgi);
-                      t_tr_geo.Stop();
                     }
                   else
                     {
-                      t_tr_hash.Start();
                       Point<3> npt = Center (mesh.Point (edge[0]),
                                              mesh.Point (edge[1]));
                       newp = mesh.AddPoint (npt);
                       cutedges.Set (edge, newp);
-                      t_tr_hash.Stop();
-                      t_tr_geo.Start();
                       geo.PointBetween (mesh.Point (oldpi1), mesh.Point (oldpi2),
                                       0.5, si, gi1, gi2, mesh.Point (newp), npgi);
-                      t_tr_geo.Stop();
                     }
                 
-                  t_tr_bis.Start();
                   BTBisectTri (oldtri, newp, npgi, newtri1, newtri2);
                 
                   mtris[i] = newtri1;
                   mtris.Append (newtri2);
                   mesh.mlparentsurfaceelement.Append (SurfaceElementIndex::FromNr0(i));
-                  t_tr_bis.Stop();
                 }
 
             timer_bisecttrig.Stop();
