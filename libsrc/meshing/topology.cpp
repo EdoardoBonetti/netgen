@@ -467,6 +467,7 @@ namespace netgen
 
         
         // keep existing edges
+        static Timer te1("topology::edges vert2edge"); te1.Start();
         cnt = 0;
         for (auto i : edge2vert.Range())
           cnt[edge2vert[i][0]]++;
@@ -474,7 +475,9 @@ namespace netgen
         for (auto i : edge2vert.Range())
           vert2edge.Add (edge2vert[i][0], i);
 
+        te1.Stop();
         // ensure all coarse grid and intermediate level edges
+        static Timer te2("topology::edges vert2vertcoarse"); te2.Start();
         cnt = 0;
         // for (int i = mesh->mlbetweennodes.Begin(); i < mesh->mlbetweennodes.End(); i++)
         for (PointIndex i : mesh->mlbetweennodes.Range())
@@ -492,6 +495,8 @@ namespace netgen
 
 
 
+        te2.Stop();
+        static Timer te3("topology::edges max_edge_on_vertex"); te3.Start();
         int max_edge_on_vertex = 0;
         for (PointIndex pi : Range(PointIndex::FromNr0(0), PointIndex::FromNr0(nv)))
           {
@@ -501,7 +506,9 @@ namespace netgen
           }
 
         
+        te3.Stop();
         // count edges associated with vertices
+        static Timer te4("topology::edges count pass"); te4.Start();
         cnt = 0;
 
         ParallelForRange
@@ -537,7 +544,9 @@ namespace netgen
                }
            }, TasksPerThread(4) );
 
+        te4.Stop();
         // accumulate number of edges
+        static Timer te5("topology::edges prefix+resize"); te5.Start();
         int ned = edge2vert.Size();
 
         for (auto v : cnt.Range())
@@ -549,6 +558,8 @@ namespace netgen
         edge2vert.SetSize(ned);
         edge2segment.SetSize(ned);
         edge2segment = SegmentIndex::INVALID;
+        te5.Stop();
+        static Timer te6("topology::edges fill pass"); te6.Start();
 
         // INDEX_CLOSED_HASHTABLE<int> v2eht(2*max_edge_on_vertex+10);
         // Array<int> vertex2;
@@ -641,6 +652,7 @@ namespace netgen
            }, TasksPerThread(4) );
 
 
+        te6.Stop();
         if (build_parent_edges)
         {
           static Timer t("build_hierarchy"); RegionTimer reg(t);
@@ -942,6 +954,7 @@ namespace netgen
         surffaces.SetSize(nse);
   
 
+        static Timer tf1("topology::faces vert2oldface"); tf1.Start();
         cnt = 0;
         for (auto i : face2vert.Range())
           cnt[face2vert[i][0]]++;
@@ -949,6 +962,7 @@ namespace netgen
         for (auto i : face2vert.Range())
           vert2oldface.Add (face2vert[i][0], i);
 
+        tf1.Stop();
         // find all potential intermediate faces
         Array<SortedPointIndices<3>> intermediate_faces;
         if (build_parent_faces)
@@ -1016,6 +1030,7 @@ namespace netgen
               }
 
           }
+        static Timer tf2("topology::faces intermediate+invalidate+max"); tf2.Start();
         cnt = 0;
         for (int i = 0; i < intermediate_faces.Size(); i++)
           cnt[intermediate_faces[i][0]]++;
@@ -1045,9 +1060,11 @@ namespace netgen
 
         // INDEX_3_CLOSED_HASHTABLE<int> vert2face(2*max_face_on_vertex+10);         
 
+        tf2.Stop();
         int oldnfa = face2vert.Size();
 
         // count faces associated with vertices
+        static Timer tf3("topology::faces count pass"); tf3.Start();
         cnt = 0;
         // for (auto v : mesh.Points().Range())
         // NgProfiler::StartTimer (timer2b1);
@@ -1103,7 +1120,9 @@ namespace netgen
             }, TasksPerThread(4) );
         // NgProfiler::StopTimer (timer2b1);
         
+        tf3.Stop();
         // accumulate number of faces
+        static Timer tf4("topology::faces prefix+resize"); tf4.Start();
         int nfa = oldnfa;
         // for (auto v : Range(mesh->GetNV())) // Points().Range())
         // for (size_t v = 0; v < mesh->GetNV(); v++)
@@ -1114,7 +1133,8 @@ namespace netgen
             nfa += hv;
           }
         face2vert.SetSize(nfa);
-        
+        tf4.Stop();
+        static Timer tf5("topology::faces fill pass"); tf5.Start();
 
         ParallelForRange
           (mesh->GetNV(),
@@ -1227,10 +1247,13 @@ namespace netgen
         // NgProfiler::StartTimer (timer2c);
 
 
+        tf5.Stop();
+        static Timer tf6("topology::faces face2surfel"); tf6.Start();
         face2surfel.SetSize (nfa);
         face2surfel = SurfaceElementIndex::INVALID;
         for (SurfaceElementIndex sei : T_Range<SurfaceElementIndex>(nse))
           face2surfel[GetFace(sei)] = sei;
+        tf6.Stop();
 
         /*
           cout << "build table complete" << endl;

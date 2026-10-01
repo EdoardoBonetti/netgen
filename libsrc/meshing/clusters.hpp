@@ -26,6 +26,10 @@ class AnisotropicClusters
 
   // connected nodes, nodes = vertices, edges, faces, elements
   Array<int> cluster_reps;
+  // topology timestamp the clusters were computed for: the clusters depend
+  // only on the topology (and the elements it was built from), so a second
+  // Update() with an unchanged topology is a no-op
+  int topo_timestamp = -1;
 
 public:
   AnisotropicClusters (const Mesh & amesh);

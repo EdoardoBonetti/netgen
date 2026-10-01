@@ -34,6 +34,8 @@ namespace netgen
     bool hasfaces = top.HasFaces();
 
     if (!hasedges || !hasfaces) return;
+    if (top.GetTimeStamp() == topo_timestamp) return;
+    topo_timestamp = top.GetTimeStamp();
 
     if (id == 0)
       PrintMessage (3, "Update clusters");

@@ -92,6 +92,7 @@ public:
 
   void Update();
   bool NeedsUpdate() const;
+  int GetTimeStamp() const { return timestamp; }
 
 
   size_t GetNEdges () const { return edge2vert.Size(); }
