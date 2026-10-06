@@ -372,10 +372,6 @@ namespace netgen
     static Timer timer_tables("Build vertex to element table");
     RegionTimer reg (timer);
 
-#ifdef PARALLEL
-    // ParallelMeshTopology & paralleltop = mesh.GetParallelTopology();
-#endif
-
     auto id = this->mesh->GetCommunicator().Rank();
     auto ntasks = this->mesh->GetCommunicator().Size();
   
@@ -421,8 +417,8 @@ namespace netgen
                                                                               table.Add (seg[1], segi);
                                                                             }, np);
         
-        vert2pointelement = ngcore::CreateSortedTable<int, PointIndex>( mesh->pointelements.Range(),
-                                                                        [&](auto & table, int pei)
+        vert2pointelement = ngcore::CreateSortedTable<PointElementIndex, PointIndex>( mesh->pointelements.Range(),
+                                                                        [&](auto & table, PointElementIndex pei)
                                                                         {
                                                                           const Element0d & pointel = mesh->pointelements[pei];
                                                                           table.Add(pointel.pnum, pei);
@@ -1244,8 +1240,7 @@ namespace netgen
 
         
         surf2volelement.SetSize (nse);
-        // surf2volelement = IVec<2>(0,0);
-        surf2volelement = { ElementIndex::INVALID, ElementIndex::INVALID };
+        surf2volelement = IVec<2,ElementIndex>(ElementIndex::INVALID, ElementIndex::INVALID);
 
         static Timer t_topology_update_build_surf2vol("Topology::Update build surf2vol"); t_topology_update_build_surf2vol.Start();        
         // for (int i = 0; i < ne; i++)
@@ -1266,11 +1261,6 @@ namespace netgen
 
         // face table complete
 
-
-#ifdef PARALLEL
-        // (*testout) << " RESET Paralleltop" << endl;
-        // paralleltop.Reset ();
-#endif
 
         static Timer t_topology_update_count_face_els("Topology::Update count face_els"); t_topology_update_count_face_els.Start();
         Array<short int, FaceIndex> face_els(nfa), face_surfels(nfa);
@@ -1317,14 +1307,9 @@ namespace netgen
                 if (face_els[i] + face_surfels[i] == 1)
                   {
                     cnt_err++;
-#ifdef PARALLEL
                     if ( ntasks > 1 )
-                      {
-                        continue;
-                        // if ( !paralleltop.DoCoarseUpdate() ) continue;
-                      }
+                      continue;
                     else
-#endif
                       {
                         (*testout) << "illegal face : " << i.Nr0() << ", cnt = " << face_els[i]+face_surfels[i] << endl;
                         (*testout) << "points = "
@@ -1664,13 +1649,6 @@ namespace netgen
       }
     
 
-#ifdef PARALLEL
-    if (id != 0)  
-      {
-        // if ( paralleltop.DoCoarseUpdate() )
-        // paralleltop.UpdateCoarseGrid();
-      }
-#endif
  
  
   

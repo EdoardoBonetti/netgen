@@ -655,12 +655,11 @@ namespace netgen
     order = 1;
 
     auto comm = mesh.GetCommunicator();
-#ifdef PARALLEL
     enum { NG_MPI_TAG_CURVE = NG_MPI_TAG_MESH+20 };
     const ParallelMeshTopology & partop = mesh.GetParallelTopology ();
-#endif
     int ntasks = comm.Size();
-    bool working = (ntasks == 1) || (comm.Rank() > 0);
+    // ranks without elements (rank 0 in the master layout) only take part in the exchanges
+    bool working = (ntasks == 1) || (mesh.GetNE() + mesh.GetNSE() + mesh.GetNSeg() > 0);
 
     if (working)
       order = aorder;
@@ -773,7 +772,6 @@ namespace netgen
       }
 
 
-#ifdef PARALLEL
     // TABLE<int> send_orders(ntasks), recv_orders(ntasks);
     DynamicTable<int> send_orders(ntasks), recv_orders(ntasks);
 
@@ -788,7 +786,6 @@ namespace netgen
       }
 
     if (ntasks > 1)
-      //  MyMPI_ExchangeTable (send_orders, recv_orders, NG_MPI_TAG_CURVE, comm);
       comm.ExchangeTable (send_orders, recv_orders, NG_MPI_TAG_CURVE);
 
     if (ntasks > 1 && working)
@@ -802,7 +799,6 @@ namespace netgen
           for (auto proc : partop.GetDistantFaceProcs(f))
             faceorder[f] = max(faceorder[f], recv_orders[proc][cnt[proc]++]);              
       }
-#endif
 
 
     edgecoeffsindex.SetSize (nedges+1);
@@ -880,7 +876,6 @@ namespace netgen
             }
 
 
-#ifdef PARALLEL
         if (ntasks > 1)
           {
             // distribute it ...
@@ -903,7 +898,6 @@ namespace netgen
                       }
                   }
             
-            // MyMPI_ExchangeTable (senddata, recvdata, NG_MPI_TAG_CURVE, comm);
             comm.ExchangeTable (senddata, recvdata, NG_MPI_TAG_CURVE);
 
             Array<int> cnt(ntasks);
@@ -925,7 +919,6 @@ namespace netgen
                       }
                   }
           }
-#endif    
 
 
         if (working)
@@ -1082,7 +1075,6 @@ namespace netgen
           swap_edge[edgenr] = int (seg[0] > seg[1]);
         }
 
-#ifdef PARALLEL
     if (ntasks > 1)
       {
         // distribute it ...
@@ -1109,7 +1101,6 @@ namespace netgen
                   }
               }
 
-        // MyMPI_ExchangeTable (senddata, recvdata, NG_MPI_TAG_CURVE, comm);
         comm.ExchangeTable (senddata, recvdata, NG_MPI_TAG_CURVE);
         
         Array<int> cnt(ntasks);
@@ -1135,7 +1126,6 @@ namespace netgen
                   }
               }
       }
-#endif    
 
     if (working)
       for (auto edgenr : use_edge.Range())
@@ -1283,7 +1273,6 @@ namespace netgen
         surfnr[top.GetFace(i)] = 
           mesh.GetFaceDescriptor(mesh[i].GetIndex()).SurfNr();
 
-#ifdef PARALLEL
     // TABLE<int> send_surfnr(ntasks), recv_surfnr(ntasks);
     DynamicTable<int> send_surfnr(ntasks), recv_surfnr(ntasks);
 
@@ -1295,7 +1284,6 @@ namespace netgen
       }
 
     if (ntasks > 1)
-      // MyMPI_ExchangeTable (send_surfnr, recv_surfnr, NG_MPI_TAG_CURVE, comm);
       comm.ExchangeTable (send_surfnr, recv_surfnr, NG_MPI_TAG_CURVE);
 
     if (ntasks > 1 && working)
@@ -1306,7 +1294,6 @@ namespace netgen
           for (int proc : partop.GetDistantFaceProcs(f))
             surfnr[f] = max(surfnr[f], recv_surfnr[proc][cnt[proc]++]);              
       }
-#endif
 
     if (mesh.GetDimension() == 3 && working)
       {
@@ -1693,9 +1680,7 @@ namespace netgen
     // (*testout) << "facecoeffs = " << endl << facecoeffs << endl;
 
 
-#ifdef PARALLEL
     comm.Barrier();
-#endif
   }
 
 
@@ -2028,7 +2013,7 @@ namespace netgen
         double lami[4];
         FlatVector vlami(4, lami);
         vlami = 0;
-        mesh[elnr].GetShapeNew (xi, vlami);
+        mesh[elnr].GetShape (xi, vlami);
         
         Mat<2,2> trans;
         Mat<3,2> dxdxic;
@@ -2036,7 +2021,7 @@ namespace netgen
           {
             MatrixFixWidth<2> dlami(4);
             dlami = 0;
-            mesh[elnr].GetDShapeNew (xi, dlami);          
+            mesh[elnr].GetDShape (xi, dlami);          
             
             trans = 0;
             for (int k = 0; k < 2; k++)
@@ -2940,14 +2925,14 @@ namespace netgen
         double lami[8];
         FlatVector vlami(8, lami);
         vlami = 0;
-        mesh[elnr].GetShapeNew<double> (xi, vlami);
+        mesh[elnr].GetShape<double> (xi, vlami);
 
         Mat<3,3> trans, dxdxic;
         if (dxdxi)
           {
             MatrixFixWidth<3> dlami(8);
             dlami = 0;
-            mesh[elnr].GetDShapeNew (xi, dlami);          
+            mesh[elnr].GetDShape (xi, dlami);          
               
             trans = 0;
             for (int k = 0; k < 3; k++)
@@ -4728,7 +4713,7 @@ namespace netgen
           {
             vlami = 0;
             Point<2,T> hxi(xi[pi*sxi], xi[pi*sxi+1]);
-            mesh[elnr].GetShapeNew ( hxi, vlami);
+            mesh[elnr].GetShape ( hxi, vlami);
             
             Point<2,T> cxi(0,0);
             for (int i = 0; i < hpref_el.np; i++)
@@ -4753,7 +4738,7 @@ namespace netgen
             for (int pi = 0; pi < npts; pi++)
               {
                 Point<2,T> hxi(xi[pi*sxi], xi[pi*sxi+1]);
-                mesh[elnr].GetDShapeNew ( hxi, dlami);    
+                mesh[elnr].GetDShape ( hxi, dlami);    
                 
                 Mat<2,2,T> trans;
                 trans = 0;
@@ -5036,7 +5021,7 @@ namespace netgen
         for (int pi = 0; pi < xi->Size(); pi++)
           {
             vlami = 0;
-            mesh[elnr].GetShapeNew ( (*xi)[pi], vlami);
+            mesh[elnr].GetShape ( (*xi)[pi], vlami);
             
             Point<3> cxi(0,0,0);
             for (int i = 0; i < hpref_el.np; i++)
@@ -5058,7 +5043,7 @@ namespace netgen
 
             for (int pi = 0; pi < xi->Size(); pi++)
               {
-                mesh[elnr].GetDShapeNew ( (*xi)[pi], dlami);      
+                mesh[elnr].GetDShape ( (*xi)[pi], dlami);      
                 
                 trans = 0;
                 for (int k = 0; k < 3; k++)
@@ -5199,7 +5184,7 @@ namespace netgen
             for (int j = 0; j < 3; j++)
               pxi(j) = xi[pi*sxi+j];
 
-            mesh[elnr].GetShapeNew (pxi, vlami);
+            mesh[elnr].GetShape (pxi, vlami);
             
             Point<3,T> cxi(0,0,0);
             for (int i = 0; i < hpref_el.np; i++)
@@ -5228,7 +5213,7 @@ namespace netgen
                 for (int j = 0; j < 3; j++)
                   pxi(j) = xi[pi*sxi+j];
 
-                mesh[elnr].GetDShapeNew (pxi, dlami);     
+                mesh[elnr].GetDShape (pxi, dlami);     
                 
                 trans = 0;
                 for (int k = 0; k < 3; k++)

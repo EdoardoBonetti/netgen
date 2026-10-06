@@ -17,214 +17,6 @@ namespace netgen
   
 
 
-#ifdef PARALLEL
-
-  /*
-    working locally, but not too much at once ...
-     
-  template <int N>
-  NG_MPI_Datatype NgMPI_CommitType ( std::array<int,N> ablocklen,
-                                     std::array<std::ptrdiff_t,N> adispl,
-                                     std::array<NG_MPI_Datatype,N> atypes,
-                                     size_t aext )
-  {
-    std::array<NG_MPI_Aint,N> displ;
-    for (int i = 0; i < N; i++)
-      displ[i] = adispl[i];
-    
-    NG_MPI_Datatype htype, type;
-    NG_MPI_Type_create_struct (N, &ablocklen[0], &displ[0], &atypes[0], &htype);
-    NG_MPI_Type_commit ( &htype );
-
-    NG_MPI_Aint lb, ext;
-    ext = aext;
-    
-    NG_MPI_Type_get_extent (htype, &lb, &ext);
-
-    NG_MPI_Type_create_resized (htype, lb, ext, &type);
-    NG_MPI_Type_commit ( &type );
-
-    return type;
-  }
-                                     
-                                     
-
-  NG_MPI_Datatype MeshPoint :: MyGetMPIType ( )
-  { 
-    static NG_MPI_Datatype type = NG_MPI_DATATYPE_NULL;
-    if (type != NG_MPI_DATATYPE_NULL) return type;
-
-    MeshPoint hp;
-    
-    array<int,3> ablocklen = { 3, 1, 1 };
-    
-    array<ptrdiff_t,3>  adispl =
-      {
-        (char*)&hp.x[0] - (char*)&hp,
-        (char*)&hp.layer - (char*)&hp,
-        (char*)&hp.singular - (char*)&hp
-      };
-        
-    array<NG_MPI_Datatype,3> atypes = { GetMPIType(hp.x[0]),
-                                        GetMPIType(hp.layer),
-                                        GetMPIType(hp.singular) };
-    
-    type = NgMPI_CommitType<3> ( ablocklen, adispl, atypes, sizeof(MeshPoint) ); 
-    return type;
-  }
-  */
-  
-  
-
-  NG_MPI_Datatype MeshPoint :: MyGetMPIType ( )
-  { 
-    static NG_MPI_Datatype type = NG_MPI_DATATYPE_NULL;
-    static NG_MPI_Datatype htype = NG_MPI_DATATYPE_NULL;
-    if (type == NG_MPI_DATATYPE_NULL)
-      {
-        MeshPoint hp;
-        
-        int blocklen[] = { 3, 1, 1 };
-
-        NG_MPI_Aint displ[] = { (char*)&hp.x[0] - (char*)&hp,
-                                (char*)&hp.layer - (char*)&hp,
-                                (char*)&hp.singular - (char*)&hp };
-        
-        NG_MPI_Datatype types[] = { NG_MPI_DOUBLE, NG_MPI_INT, NG_MPI_DOUBLE };
-
-        // *testout << "displ = " << displ[0] << ", " << displ[1] << ", " << displ[2] << endl;
-        // *testout << "sizeof = " << sizeof (MeshPoint) << endl;
-        NG_MPI_Type_create_struct (3, blocklen, displ, types, &htype);
-        NG_MPI_Type_commit ( &htype );
-        NG_MPI_Aint lb, ext;
-        NG_MPI_Type_get_extent (htype, &lb, &ext);
-        // *testout << "lb = " << lb << endl;
-        // *testout << "ext = " << ext << endl;
-        ext = sizeof (MeshPoint);
-        NG_MPI_Type_create_resized (htype, lb, ext, &type);
-        NG_MPI_Type_commit ( &type );
-      }
-    return type;
-  }
-
-
-  
-  NG_MPI_Datatype Element2d :: MyGetMPIType ( )
-  { 
-    static NG_MPI_Datatype type = NG_MPI_DATATYPE_NULL;
-    static NG_MPI_Datatype htype = NG_MPI_DATATYPE_NULL;
-    if (type == NG_MPI_DATATYPE_NULL)
-      {
-        Element2d hel;
-        int blocklen[] = { ELEMENT2D_MAXPOINTS, 1, 1 };
-        NG_MPI_Aint displ[] =
-          { (char*)&hel[0] - (char*)&hel,
-            (char*)&hel.Header().index - (char*)&hel,
-            (char*)&hel.Header().typ - (char*)&hel
-          };
-        NG_MPI_Datatype types[] = { GetMPIType<PointIndex>(), GetMPIType(hel.Header().index),
-                                 GetMPIType(hel.Header().typ) };
-        NG_MPI_Type_create_struct (3, blocklen, displ, types, &htype);
-        NG_MPI_Type_commit ( &htype );
-        NG_MPI_Aint lb, ext;
-        NG_MPI_Type_get_extent (htype, &lb, &ext);
-        // *testout << "lb = " << lb << endl;
-        // *testout << "ext = " << ext << endl;
-        ext = sizeof (Element2d);
-        NG_MPI_Type_create_resized (htype, lb, ext, &type);
-        NG_MPI_Type_commit ( &type );
-      }
-    return type;
-  }
-
-  NG_MPI_Datatype Element :: MyGetMPIType ( )
-  {
-    static NG_MPI_Datatype type = NG_MPI_DATATYPE_NULL;
-    static NG_MPI_Datatype htype = NG_MPI_DATATYPE_NULL;
-    if (type == NG_MPI_DATATYPE_NULL)
-      {
-        Element hel;
-        int blocklen[] = { ELEMENT_MAXPOINTS, 1, 1 };
-        NG_MPI_Aint displ[] =
-          { (char*)&hel[0] - (char*)&hel,
-            (char*)&hel.Header().index - (char*)&hel,
-            (char*)&hel.Header().typ - (char*)&hel
-          };
-        NG_MPI_Datatype types[] = { GetMPIType<PointIndex>(), GetMPIType(hel.Header().index),
-                                 GetMPIType(hel.Header().typ) };
-        NG_MPI_Type_create_struct (3, blocklen, displ, types, &htype);
-        NG_MPI_Type_commit ( &htype );
-        NG_MPI_Aint lb, ext;
-        NG_MPI_Type_get_extent (htype, &lb, &ext);
-        // *testout << "lb = " << lb << endl;
-        // *testout << "ext = " << ext << endl;
-        ext = sizeof (Element);
-        NG_MPI_Type_create_resized (htype, lb, ext, &type);
-        NG_MPI_Type_commit ( &type );
-      }
-    return type;
-  }
-
-  NG_MPI_Datatype Segment :: MyGetMPIType ( )
-  {
-    static NG_MPI_Datatype type = NG_MPI_DATATYPE_NULL;
-    static NG_MPI_Datatype htype = NG_MPI_DATATYPE_NULL;
-    if (type == NG_MPI_DATATYPE_NULL)
-      {
-        Segment hel;
-        int blocklen[] = { 3, 1 };
-        NG_MPI_Aint displ[] =
-          { (char*)&hel.pnums[0] - (char*)&hel,
-            (char*)&hel.index - (char*)&hel
-          };
-        NG_MPI_Datatype types[] = {
-          GetMPIType<PointIndex>(), GetMPIType(hel.index)
-        };
-        NG_MPI_Type_create_struct (2, blocklen, displ, types, &htype);
-        NG_MPI_Type_commit ( &htype );
-        NG_MPI_Aint lb, ext;
-        NG_MPI_Type_get_extent (htype, &lb, &ext);
-        // *testout << "lb = " << lb << endl;
-        // *testout << "ext = " << ext << endl;
-        ext = sizeof (Segment);
-        NG_MPI_Type_create_resized (htype, lb, ext, &type);
-        NG_MPI_Type_commit ( &type );
-      }
-    return type;
-  }
-
-#endif
-
-
-#ifdef PARALLEL
-  NG_MPI_Datatype Element0d :: MyGetMPIType()
-  {
-    static NG_MPI_Datatype type = NG_MPI_DATATYPE_NULL;
-    static NG_MPI_Datatype htype = NG_MPI_DATATYPE_NULL;
-    if (type == NG_MPI_DATATYPE_NULL)
-      {
-        Element0d hel;
-        int blocklen[] = { 1, 1 };
-        NG_MPI_Aint displ[] =
-          { (char*)&hel.pnum - (char*)&hel,
-            (char*)&hel.index - (char*)&hel,
-          };
-        NG_MPI_Datatype types[] = {
-          GetMPIType(hel.pnum), GetMPIType(hel.index)
-        };
-        NG_MPI_Type_create_struct (2, blocklen, displ, types, &htype);
-        NG_MPI_Type_commit ( &htype );
-        NG_MPI_Aint lb, ext;
-        NG_MPI_Type_get_extent (htype, &lb, &ext);
-        // *testout << "lb = " << lb << endl;
-        // *testout << "ext = " << ext << endl;
-        ext = sizeof (Element0d);
-        NG_MPI_Type_create_resized (htype, lb, ext, &type);
-        NG_MPI_Type_commit ( &type );
-      }
-    return type;
-  }
-#endif
 
  void Element0d :: DoArchive (Archive & ar)
  {
@@ -476,6 +268,29 @@ namespace netgen
   Array<IntegrationPointData*> ipdtrig;
   Array<IntegrationPointData*> ipdquad;
 
+  // trans = pmat * dshape, with dshape stored as np x D
+  template <int D>
+  static void CalcTrans (const DenseMatrix & pmat, const MatrixFixWidth<D> & dshape,
+                         DenseMatrix & trans)
+  {
+    for (int i = 0; i < D; i++)
+      for (int j = 0; j < D; j++)
+        {
+          double sum = 0;
+          for (int k = 0; k < dshape.Height(); k++)
+            sum += pmat(i,k) * dshape(k,j);
+          trans(i,j) = sum;
+        }
+  }
+
+  template <int D>
+  static void DShapeToDense (const MatrixFixWidth<D> & dshape, DenseMatrix & dense)
+  {
+    for (int i = 0; i < dshape.Height(); i++)
+      for (int j = 0; j < D; j++)
+        dense(j,i) = dshape(i,j);
+  }
+
 
   int Element2dRef :: GetNIP () const
   {
@@ -524,9 +339,8 @@ namespace netgen
                      DenseMatrix & trans) const
   {
     int np = GetNP();
-    DenseMatrix pmat(2, np), dshape(2, np);
-    pmat.SetSize (2, np);
-    dshape.SetSize (2, np);
+    DenseMatrix pmat(2, np);
+    MatrixFixWidth<2> dshape(np);
 
     Point<2> p;
     double w;
@@ -534,8 +348,7 @@ namespace netgen
     GetPointMatrix (points, pmat);
     GetIntegrationPoint (ip, p, w);
     GetDShape (p, dshape);
-  
-    CalcABt (pmat, dshape, trans);
+    CalcTrans (pmat, dshape, trans);
 
     /*
       (*testout) << "p = " << p  << endl
@@ -573,35 +386,7 @@ namespace netgen
   }
 
 
-  void Element2dRef :: GetShape (const Point<2> & p, Vector & shape) const
-  {
-    if (shape.Size() != GetNP())
-      {
-        cerr << "Element::GetShape: Length not fitting" << endl;
-        return;
-      }
-
-    switch (h->typ)
-      {
-      case TRIG:
-        shape(0) = 1 - p[0] - p[1];
-        shape(1) = p[0];
-        shape(2) = p[1];
-        break;
-      case QUAD:
-        shape(0) = (1-p[0]) * (1-p[1]);
-        shape(1) = p[0] * (1-p[1]);
-        shape(2) = p[0] * p[1];
-        shape(3) = (1-p[0]) * p[1];
-        break;
-      default:
-        PrintSysError ("Element2d::GetShape, illegal type ", int(h->typ));
-      }
-  }
-
-
-
-  void Element2dRef :: GetShapeNew (const Point<2> & p, FlatVector & shape) const
+  void Element2dRef :: GetShape (const Point<2> & p, FlatVector & shape) const
   {
     switch (h->typ)
       {
@@ -623,12 +408,12 @@ namespace netgen
         }
 
       default:
-        throw NgException ("illegal element type in GetShapeNew");
+        throw NgException ("illegal element type in GetShape");
       }
   }
 
   template <typename T>
-  void Element2dRef :: GetShapeNew (const Point<2,T> & p, TFlatVector<T> shape) const
+  void Element2dRef :: GetShape (const Point<2,T> & p, TFlatVector<T> shape) const
   {
     switch (h->typ)
       {
@@ -649,7 +434,7 @@ namespace netgen
           break;
         }
       default:
-        throw NgException ("illegal element type in GetShapeNew");
+        throw NgException ("illegal element type in GetShape");
       }
   }
 
@@ -659,49 +444,11 @@ namespace netgen
 
 
 
-
-
-  void Element2dRef :: 
-  GetDShape (const Point<2> & p, DenseMatrix & dshape) const
-  {
-#ifdef DEBUG
-    if (dshape.Height() != 2 || dshape.Width() != np)
-      {
-        PrintSysError ("Element::DShape: Sizes don't fit");
-        return;
-      }
-#endif
-
-    switch (h->typ)
-      {
-      case TRIG:
-        dshape.Elem(1, 1) = -1;
-        dshape.Elem(1, 2) = 1;
-        dshape.Elem(1, 3) = 0;
-        dshape.Elem(2, 1) = -1;
-        dshape.Elem(2, 2) = 0;
-        dshape.Elem(2, 3) = 1;
-        break;
-      case QUAD:
-        dshape.Elem(1, 1) = -(1-p[1]);
-        dshape.Elem(1, 2) = (1-p[1]);
-        dshape.Elem(1, 3) = p[1];
-        dshape.Elem(1, 4) = -p[1];
-        dshape.Elem(2, 1) = -(1-p[0]);
-        dshape.Elem(2, 2) = -p[0];
-        dshape.Elem(2, 3) = p[0];
-        dshape.Elem(2, 4) = (1-p[0]);
-        break;
-
-      default:
-        PrintSysError ("Element2d::GetDShape, illegal type ", int(h->typ));
-      }
-  }
 
 
   template <typename T>
   void Element2dRef :: 
-  GetDShapeNew (const Point<2,T> & p, MatrixFixWidth<2,T> & dshape) const
+  GetDShape (const Point<2,T> & p, MatrixFixWidth<2,T> & dshape) const
   {
     switch (h->typ)
       {
@@ -730,7 +477,7 @@ namespace netgen
           break;
         }
       default:
-        throw NgException ("illegal element type in GetDShapeNew");
+        throw NgException ("illegal element type in GetDShape");
       }
   }
 
@@ -1002,7 +749,9 @@ namespace netgen
         ipd->dshape.SetSize(2, GetNP());
 
         GetShape (hp, ipd->shape);
-        GetDShape (hp, ipd->dshape);
+        MatrixFixWidth<2> dshape(GetNP());
+        GetDShape (hp, dshape);
+        DShapeToDense (dshape, ipd->dshape);
 
         switch (GetNP())
           {
@@ -1060,9 +809,7 @@ namespace netgen
     flags.deleted = 0;
     flags.fixed = 0;
     is_curved = false;
-#ifdef PARALLEL
     partitionNumber = -1;
-#endif
   }
   */
 
@@ -1870,9 +1617,8 @@ namespace netgen
                      DenseMatrix & trans) const
   {
     int np = GetNP();
-    DenseMatrix pmat(3, np), dshape(3, np);
-    pmat.SetSize (3, np);
-    dshape.SetSize (3, np);
+    DenseMatrix pmat(3, np);
+    MatrixFixWidth<3> dshape(np);
 
     Point<3> p;
     double w;
@@ -1880,8 +1626,7 @@ namespace netgen
     GetPointMatrix (points, pmat);
     GetIntegrationPoint (ip, p, w);
     GetDShape (p, dshape);
-  
-    CalcABt (pmat, dshape, trans);
+    CalcTrans (pmat, dshape, trans);
 
     /*
       (*testout) << "p = " << p  << endl
@@ -1917,75 +1662,8 @@ namespace netgen
   }
 
 
-  void ElementRef :: GetShape (const Point<3> & hp, Vector & shape) const
-  {
-    if (shape.Size() != GetNP())
-      {
-        cerr << "Element::GetShape: Length not fitting" << endl;
-        return;
-      }
-
-    switch (h->typ)
-      {
-      case TET:
-        {
-          shape(0) = 1 - hp[0] - hp[1] - hp[2]; 
-          shape(1) = hp[0];
-          shape(2) = hp[1];
-          shape(3) = hp[2];
-          break;
-        }
-      case TET10:
-        {
-          double lam1 = 1 - hp[0] - hp[1] - hp[2];
-          double lam2 = hp[0];
-          double lam3 = hp[1];
-          double lam4 = hp[2];
-        
-          shape(4) = 4 * lam1 * lam2;
-          shape(5) = 4 * lam1 * lam3;
-          shape(6) = 4 * lam1 * lam4;
-          shape(7) = 4 * lam2 * lam3;
-          shape(8) = 4 * lam2 * lam4;
-          shape(9) = 4 * lam3 * lam4;
-        
-          shape(0) = lam1 - 0.5 * (shape(4) + shape(5) + shape(6));
-          shape(1) = lam2 - 0.5 * (shape(4) + shape(7) + shape(8));
-          shape(2) = lam3 - 0.5 * (shape(5) + shape(7) + shape(9));
-          shape(3) = lam4 - 0.5 * (shape(6) + shape(8) + shape(9));
-          break;
-        }
-
-      case PRISM:
-        {
-          shape(0) = hp(0) * (1-hp(2));
-          shape(1) = hp(1) * (1-hp(2));
-          shape(2) = (1-hp(0)-hp(1)) * (1-hp(2));
-          shape(3) = hp(0) * hp(2);
-          shape(4) = hp(1) * hp(2);
-          shape(5) = (1-hp(0)-hp(1)) * hp(2);
-          break;
-        }
-      case HEX:
-        {
-          shape(0) = (1-hp(0))*(1-hp(1))*(1-hp(2));
-          shape(1) = (  hp(0))*(1-hp(1))*(1-hp(2));
-          shape(2) = (  hp(0))*(  hp(1))*(1-hp(2));
-          shape(3) = (1-hp(0))*(  hp(1))*(1-hp(2));
-          shape(4) = (1-hp(0))*(1-hp(1))*(  hp(2));
-          shape(5) = (  hp(0))*(1-hp(1))*(  hp(2));
-          shape(6) = (  hp(0))*(  hp(1))*(  hp(2));
-          shape(7) = (1-hp(0))*(  hp(1))*(  hp(2));
-          break;
-        }
-      default:
-        throw NgException("Element :: GetShape not implemented for that element");
-      }
-  }
-
-
   template <typename T>
-  void ElementRef :: GetShapeNew (const Point<3,T> & p, TFlatVector<T> shape) const
+  void ElementRef :: GetShape (const Point<3,T> & p, TFlatVector<T> shape) const
   {
     /*
       if (shape.Size() < GetNP())
@@ -2169,41 +1847,15 @@ namespace netgen
           break;
         }
       default:
-        throw NgException("Element :: GetNewShape not implemented for that element");
+        throw NgException("Element :: GetShape not implemented for that element");
       }
   }
 
 
-
-  void ElementRef :: 
-  GetDShape (const Point<3> & hp, DenseMatrix & dshape) const
-  {
-    int np = GetNP();
-    if (dshape.Height() != 3 || dshape.Width() != np)
-      {
-        cerr << "Element::DShape: Sizes don't fit" << endl;
-        return;
-      }
-
-    double eps = 1e-6;
-    Vector shaper(np), shapel(np);
-
-    for (auto i : Range(3))
-      {
-        Point<3> pr(hp), pl(hp);
-        pr[i] += eps;
-        pl[i] -= eps;
-      
-        GetShape (pr, shaper);
-        GetShape (pl, shapel);
-        for (int j = 0; j < np; j++)
-          dshape(i, j) = (shaper(j) - shapel(j)) / (2 * eps);
-      }
-  }
 
   template <typename T>
   void ElementRef :: 
-  GetDShapeNew (const Point<3,T> & p, MatrixFixWidth<3,T> & dshape) const
+  GetDShape (const Point<3,T> & p, MatrixFixWidth<3,T> & dshape) const
   {
     switch (h->typ)
       {
@@ -2255,8 +1907,8 @@ namespace netgen
               pr(i) += eps;
               pl(i) -= eps;
             
-              GetShapeNew (pr, shaper);
-              GetShapeNew (pl, shapel);
+              GetShape (pr, shaper);
+              GetShape (pl, shapel);
               for (int j = 0; j < np; j++)
                 dshape(j, i) = (shaper(j) - shapel(j)) / (2 * eps);
             }
@@ -2268,7 +1920,7 @@ namespace netgen
           Point<3,AutoDiff<3,T>> adp{adx, ady, adz};
           ArrayMem<AutoDiff<3,T>,100> mem(GetNP());
           TFlatVector<AutoDiff<3,T>> adshape(GetNP(), &mem[0]);
-          GetShapeNew (adp, adshape);
+          GetShape (adp, adshape);
           for (int j = 0; j < GetNP(); j++)
             for (int k = 0; k < 3; k++)
               dshape(j,k) = adshape(j).DValue(k);
@@ -2276,18 +1928,18 @@ namespace netgen
       }
   }
 
-  template void Element2dRef :: GetShapeNew (const Point<2,double> & p, TFlatVector<double> shape) const;
-  template void Element2dRef :: GetShapeNew (const Point<2,SIMD<double>> & p, TFlatVector<SIMD<double>> shape) const;
+  template void Element2dRef :: GetShape (const Point<2,double> & p, TFlatVector<double> shape) const;
+  template void Element2dRef :: GetShape (const Point<2,SIMD<double>> & p, TFlatVector<SIMD<double>> shape) const;
 
-  template void Element2dRef::GetDShapeNew<double> (const Point<2> &, MatrixFixWidth<2> &) const;
-  template void Element2dRef::GetDShapeNew<SIMD<double>> (const Point<2,SIMD<double>> &, MatrixFixWidth<2,SIMD<double>> &) const;
+  template void Element2dRef::GetDShape<double> (const Point<2> &, MatrixFixWidth<2> &) const;
+  template void Element2dRef::GetDShape<SIMD<double>> (const Point<2,SIMD<double>> &, MatrixFixWidth<2,SIMD<double>> &) const;
 
 
-  template DLL_HEADER void ElementRef :: GetShapeNew (const Point<3,double> & p, TFlatVector<double> shape) const;
-  template DLL_HEADER void ElementRef :: GetShapeNew (const Point<3,SIMD<double>> & p, TFlatVector<SIMD<double>> shape) const;
+  template DLL_HEADER void ElementRef :: GetShape (const Point<3,double> & p, TFlatVector<double> shape) const;
+  template DLL_HEADER void ElementRef :: GetShape (const Point<3,SIMD<double>> & p, TFlatVector<SIMD<double>> shape) const;
   
-  template void ElementRef::GetDShapeNew<double> (const Point<3> &, MatrixFixWidth<3> &) const;
-  template void ElementRef::GetDShapeNew<SIMD<double>> (const Point<3,SIMD<double>> &, MatrixFixWidth<3,SIMD<double>> &) const;
+  template void ElementRef::GetDShape<double> (const Point<3> &, MatrixFixWidth<3> &) const;
+  template void ElementRef::GetDShape<SIMD<double>> (const Point<3,SIMD<double>> &, MatrixFixWidth<3,SIMD<double>> &) const;
 
 
   void ElementRef :: 
@@ -2328,7 +1980,7 @@ namespace netgen
         frob = sqrt (frob);
         frob /= 3;
 
-        double det = -trans.Det();
+        double det = trans.Det();
       
         if (det <= 0)
           err += 1e12;
@@ -2397,9 +2049,6 @@ namespace netgen
             ddet += hmat.Det();
           }
 
-
-        det *= -1;
-        ddet *= -1;
 
       
         if (det <= 0)
@@ -2476,13 +2125,11 @@ namespace netgen
                 int jm1 = (j > 1) ? (j-1) : 3;
                 int jp1 = (j < 3) ? (j+1) : 1;
               
-                ddet[k-1] += (-1.)* dtrans.Get(k,j) * ( trans.Get(km1,jm1)*trans.Get(kp1,jp1) - 
-                                                        trans.Get(km1,jp1)*trans.Get(kp1,jm1) );
+                ddet[k-1] += dtrans.Get(k,j) * ( trans.Get(km1,jm1)*trans.Get(kp1,jp1) - 
+                                                 trans.Get(km1,jp1)*trans.Get(kp1,jm1) );
               }
           }
 
-      
-        det *= -1;
       
         if (det <= 0)
           err += 1e12;
@@ -2530,8 +2177,10 @@ namespace netgen
         ipd->shape.SetSize(GetNP());
         ipd->dshape.SetSize(3, GetNP());
 
-        GetShape (ipd->p, ipd->shape);
-        GetDShape (ipd->p, ipd->dshape);
+        GetShape<double> (ipd->p, ipd->shape);
+        MatrixFixWidth<3> dshape(GetNP());
+        GetDShape (ipd->p, dshape);
+        DShapeToDense (dshape, ipd->dshape);
 
         switch (GetType())
           {
