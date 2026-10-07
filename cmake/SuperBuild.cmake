@@ -90,7 +90,7 @@ if(BUILD_OCC)
 
   ExternalProject_Add(project_occ
     URL https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/V8_0_1.zip
-    URL_MD5 26b0630938d18dacf55b4bd9708cc405
+    URL_MD5 5b0b171d7028cf73bd9369997091347a
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external_dependencies
     ${SUBPROJECT_ARGS}
     CMAKE_ARGS
@@ -152,8 +152,8 @@ if(BUILD_ZLIB)
   set(ZLIB_ROOT ${CMAKE_CURRENT_BINARY_DIR}/dependencies/zlib)
   ExternalProject_Add(project_zlib
     ${SUBPROJECT_ARGS}
-    URL https://github.com/madler/zlib/archive/refs/tags/v1.2.11.zip
-    URL_MD5 9d6a627693163bbbf3f26403a3a0b0b1
+    URL https://github.com/madler/zlib/archive/refs/tags/v1.3.1.zip
+    URL_MD5 127b8a71a3fb8bebe89df1080f15fdf6
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external_dependencies
     CMAKE_ARGS
          -DCMAKE_INSTALL_PREFIX=${ZLIB_ROOT}

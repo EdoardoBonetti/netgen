@@ -327,6 +327,16 @@ DLL_HEADER void ExportNetgenMeshing(py::module &m)
     .def("__hash__" , FunctionPointer( [](SegmentIndex &self ) { return self.Nr0(); }) )
     ;
 
+  py::class_<PointElementIndex>(m, "ElementId0D")
+    .def(py::init([](int i) { return PointElementIndex::FromNr0(i); }))
+    .def("__repr__", &ToString<PointElementIndex>)
+    .def("__str__", &ToString<PointElementIndex>)
+    .def_property_readonly("nr", [](PointElementIndex &self) { return self.Nr0(); })
+    .def("__eq__" , FunctionPointer( [](PointElementIndex &self, PointElementIndex &other)
+                  { return self==other; }) )
+    .def("__hash__" , FunctionPointer( [](PointElementIndex &self ) { return self.Nr0(); }) )
+    ;
+
 
 
   /*  
@@ -747,6 +757,9 @@ DLL_HEADER void ExportNetgenMeshing(py::module &m)
          "create point element"
          )
     .def("__repr__", &ToString<Element0d>)
+    .def_property("index",
+                  [](const Element0d & self) { return self.GetIndex().Nr1(); },
+                  [](Element0d & self, int index) { self.SetIndex(VertexRegionIndex::FromNr1(index)); })
     .def_property_readonly("vertices", 
                   FunctionPointer ([](const Element0d & self) -> py::list
                                    {
@@ -857,7 +870,7 @@ DLL_HEADER void ExportNetgenMeshing(py::module &m)
   ExportArray<ElementIndex, ElementIndex>(m);
   
   ExportArray<Segment,SegmentIndex>(m);
-  ExportArray<Element0d>(m);
+  ExportArray<Element0d, PointElementIndex>(m);
   ExportArray<MeshPoint,PointIndex>(m);
   py::class_<FaceRegionIndex>(m, "FaceDescriptorIndex")
     .def(py::init([](int nr0) { return FaceRegionIndex::FromNr0(nr0); }), py::arg("nr0"), "from 0-based position")
@@ -1051,28 +1064,38 @@ DLL_HEADER void ExportNetgenMeshing(py::module &m)
           m.GetBox(pmin, pmax);
           return py::make_tuple( Point<3>(pmin),Point<3>(pmax));
     })
-    .def("Partition", [](shared_ptr<Mesh> self, int numproc) {
-        self->ParallelMetis(numproc);
-      }, py::arg("numproc"))
+    .def("Partition", [](shared_ptr<Mesh> self, int numproc, bool root_participates) {
+        self->ParallelMetis(numproc, root_participates);
+      }, py::arg("numproc"), py::arg("root_participates")=true)
     .def("OrderElements", [](shared_ptr<Mesh> self) {
         self->OrderElements();
       })
     
-    .def("Distribute", [](shared_ptr<Mesh> self, NgMPI_Comm comm) {
+    .def("Distribute", [](shared_ptr<Mesh> self, NgMPI_Comm comm, bool root_participates) {
         self->SetCommunicator(comm);
         if(comm.Size()==1) return self;
-        // if(MyMPI_GetNTasks(comm)==2) throw NgException("Sorry, cannot handle communicators with NP=2!");
-        // cout << " rank " << MyMPI_GetId(comm) << " of " << MyMPI_GetNTasks(comm) << " called Distribute " << endl;
-        if(comm.Rank()==0) self->Distribute();
+        if(comm.Rank()==0) self->Distribute(root_participates);
         else self->SendRecvMesh();
         return self;
-      }, py::arg("comm"))
+      }, py::arg("comm"), py::arg("root_participates")=true,
+      "Collective: partition the mesh of rank 0 and distribute it over the communicator.\n"
+      "Every rank gets a part; root_participates=False leaves rank 0 empty (legacy master layout).")
     .def_static("Receive", [](NgMPI_Comm comm) -> shared_ptr<Mesh> {
         auto mesh = make_shared<Mesh>();
         mesh->SetCommunicator(comm);
         mesh->SendRecvMesh();
         return mesh;
       }, py::arg("comm"))
+    .def("Gather", [](const Mesh & self, int root) -> py::object {
+        shared_ptr<Mesh> gathered;
+        {
+          py::gil_scoped_release release;
+          gathered = self.GatherToRoot(root);
+        }
+        if (gathered) return py::cast(gathered);
+        return py::none();
+      }, py::arg("root")=0,
+      "Collective over the mesh communicator: returns the whole mesh on rank root, None on the other ranks")
     .def("Load",  FunctionPointer 
          ([](shared_ptr<Mesh> self, const string & filename)
           {
@@ -1194,18 +1217,7 @@ DLL_HEADER void ExportNetgenMeshing(py::module &m)
               mesh->SendRecvMesh();
             }
 
-            if(ntasks>1) {
-              // #ifdef PARALLEL
-              /** Scatter the geometry-string (no dummy-implementation in mpi_interface) **/
-              /*
-              int strs = buf.Size();
-              MyMPI_Bcast(strs, comm);
-              if(strs>0)
-                MyMPI_Bcast(buf, comm);
-              */
-              comm.Bcast(buf);
-              // #endif
-            }
+            comm.Bcast(buf);   // geometry string, no-op on one rank
 
             shared_ptr<NetgenGeometry> geo;
             if(buf.Size()) { // if we had geom-info in the file, take it
@@ -1227,6 +1239,36 @@ DLL_HEADER void ExportNetgenMeshing(py::module &m)
     
     .def_property("dim", &Mesh::GetDimension, &Mesh::SetDimension)
 
+    .def("EnablePreviewBuffer", &Mesh::EnablePreviewBuffer, py::arg("enable")=true,
+         py::call_guard<py::gil_scoped_release>(),
+         "Collect surface triangles during meshing for a live preview, see TakePreviewTriangles")
+    .def("TakePreviewTriangles", [] (Mesh & self, bool with_edges) -> py::tuple
+         {
+           std::vector<float> coords;
+           std::vector<int> faces, reset;
+           std::vector<uint8_t> edges;
+           {
+             py::gil_scoped_release release;
+             self.TakePreview (coords, faces, reset, edges);
+           }
+           py::ssize_t n = faces.size();
+           py::array_t<float> np_coords({ n, py::ssize_t(3), py::ssize_t(3) });
+           py::array_t<int32_t> np_faces(n);
+           py::array_t<int32_t> np_reset(py::ssize_t(reset.size()));
+           std::copy (coords.begin(), coords.end(), np_coords.mutable_data());
+           std::copy (faces.begin(), faces.end(), np_faces.mutable_data());
+           std::copy (reset.begin(), reset.end(), np_reset.mutable_data());
+           if (!with_edges)
+             return py::make_tuple (np_coords, np_faces, np_reset);
+           py::array_t<uint8_t> np_edges(n);
+           std::copy (edges.begin(), edges.end(), np_edges.mutable_data());
+           return py::make_tuple (np_coords, np_faces, np_reset, np_edges);
+         }, py::arg("edges")=false,
+         "Returns (coords (n,3,3) float32, faces (n,) int32, reset (k,) int32) collected since the last call.\n"
+         "Triangles of faces listed in reset (-1: all) delivered earlier must be dropped before appending coords.\n"
+         "With edges=True additionally returns edge_mask (n,) uint8: bit k set if triangle edge (vk,v(k+1)%3)\n"
+         "is an element edge, unset for diagonals of split quads/polygons.")
+
     .def("Elements3D",
          [] (Mesh & self) -> T_VOLELEMENTS & { return self.VolumeElements(); },
          py::return_value_policy::reference_internal)
@@ -1239,7 +1281,7 @@ DLL_HEADER void ExportNetgenMeshing(py::module &m)
          static_cast<Array<Segment, SegmentIndex>&(Mesh::*)()> (&Mesh::LineSegments),
          py::return_value_policy::reference)
 
-    .def("Elements0D", FunctionPointer([] (Mesh & self) -> Array<Element0d>&
+    .def("Elements0D", FunctionPointer([] (Mesh & self) -> Array<Element0d, PointElementIndex>&
                                        {
                                          return self.pointelements;
                                        } ),
@@ -2294,7 +2336,12 @@ project_boundaries : Optional[str] = None
     py::class_<ClearSolutionClass> (m, "ClearSolutionClass")
       .def(py::init<>())
       ;
-    m.def("SetParallelPickling", [](bool par) { parallel_pickling = par; });
+    m.def("SetParallelPickling", [](bool par) {
+        if (par)
+          PyErr_WarnEx(PyExc_DeprecationWarning,
+                       "collective parallel pickling is deprecated: pickling will become local, use Mesh.Gather() for the whole mesh", 1);
+        parallel_pickling = par;
+      }, py::arg("par"), "par=False: every rank pickles its local mesh; True (deprecated default): collective, rank 0 pickles the whole mesh");
     m.def ("_Redraw",
         ([](bool blocking, double fr)
           {

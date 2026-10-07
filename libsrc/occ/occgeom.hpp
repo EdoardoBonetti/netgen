@@ -136,6 +136,14 @@ namespace netgen
   };
 
 
+  struct OCCAssemblyNode
+  {
+    std::string name;
+    TopoDS_Shape shape;          // null on internal (assembly) nodes
+    bool is_assembly = false;
+    std::vector<std::shared_ptr<OCCAssemblyNode>> children;
+  };
+
   class DLL_HEADER OCCGeometry : public NetgenGeometry
   {
     Point<3> center;
@@ -183,6 +191,7 @@ namespace netgen
     }
 
     TopoDS_Shape shape;
+    std::shared_ptr<OCCAssemblyNode> assembly_tree;
     TopTools_IndexedMapOfShape fmap, emap, vmap, somap, shmap, wmap;
     Array<bool> fsingular, esingular, vsingular;
     Box<3> boundingbox;
@@ -312,7 +321,7 @@ namespace netgen
     }
 
     void CalcBoundingBox ();
-    void BuildVisualizationMesh (double deflection);
+    void BuildVisualizationMesh (double deflection = 0.01, double angle = 0.5);
     
     void RecursiveTopologyTree (const TopoDS_Shape & sh,
                                 stringstream & str,

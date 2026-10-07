@@ -251,9 +251,7 @@ namespace netgen
 
     geomtype = NO_GEOM;
 
-#ifdef PARALLEL
     paralleltop = make_unique<ParallelMeshTopology> (*this);
-#endif
   }
 
 
@@ -395,10 +393,9 @@ namespace netgen
 
     Regions<1>().SetSize(0);
 
-#ifdef PARALLEL
     paralleltop = make_unique<ParallelMeshTopology> (*this);
-#endif
 
+    PreviewResync();
     timestamp = NextTimeStamp();
   }
 
@@ -407,6 +404,7 @@ namespace netgen
   { 
     surfelements.SetSize(0);
     hp_surfinfo.SetSize(0);
+    PreviewResync();
     /*
     for (int i = 0; i < Regions<2>().Size(); i++)
       Regions<2>()[i].firstelement = SurfaceElementIndex::INVALID;
@@ -531,7 +529,124 @@ namespace netgen
     if (SurfaceArea().Valid())
       SurfaceArea().Add (el);
 
+    if (PreviewEnabled())
+      PreviewAppend (el);
+
     return si;
+  }
+
+  void Mesh :: EnablePreviewBuffer (bool enable)
+  {
+    {
+      std::lock_guard<std::mutex> lock(preview.mutex);
+      preview.coords.clear();
+      preview.faces.clear();
+      preview.edges.clear();
+      preview.reset.clear();
+      preview.enabled = enable;
+    }
+    if (enable)
+      PreviewResync();
+  }
+
+  void Mesh :: TakePreview (std::vector<float> & coords, std::vector<int> & faces,
+                            std::vector<int> & reset)
+  {
+    std::vector<uint8_t> edges;
+    TakePreview (coords, faces, reset, edges);
+  }
+
+  void Mesh :: TakePreview (std::vector<float> & coords, std::vector<int> & faces,
+                            std::vector<int> & reset, std::vector<uint8_t> & edges)
+  {
+    coords.clear();
+    faces.clear();
+    reset.clear();
+    edges.clear();
+    std::lock_guard<std::mutex> lock(preview.mutex);
+    swap(coords, preview.coords);
+    swap(faces, preview.faces);
+    swap(reset, preview.reset);
+    swap(edges, preview.edges);
+  }
+
+  static void PreviewAddTrigs (const Mesh & mesh, const Element2dRef & el,
+                               std::vector<float> & coords, std::vector<int> & faces,
+                               std::vector<uint8_t> & edges)
+  {
+    int nv = el.GetNV();
+    int fi = el.GetIndex().Nr0();
+    for (int i = 1; i+1 < nv; i++)
+      {
+        for (int j : { 0, i, i+1 })
+          {
+            const auto & p = mesh[el[j]];
+            for (int k = 0; k < 3; k++)
+              coords.push_back (p(k));
+          }
+        faces.push_back (fi);
+        edges.push_back (uint8_t((i == 1 ? 1 : 0) | 2 | (i+2 == nv ? 4 : 0)));
+      }
+  }
+
+  void Mesh :: PreviewAppend (const Element2dRef & el)
+  {
+    std::lock_guard<std::mutex> lock(preview.mutex);
+    PreviewAddTrigs (*this, el, preview.coords, preview.faces, preview.edges);
+  }
+
+  void Mesh :: PreviewResync (FaceRegionIndex fi)
+  {
+    if (!PreviewEnabled()) return;
+    std::vector<float> coords;
+    std::vector<int> faces;
+    std::vector<uint8_t> edges;
+    auto add = [&] (const Element2dRef & el)
+    {
+      if (!el.IsDeleted() && el[0].IsValid())
+        PreviewAddTrigs (*this, el, coords, faces, edges);
+    };
+    if (fi.IsValid())
+      {
+        Array<SurfaceElementIndex> seia;
+        GetSurfaceElementsOfFace (fi, seia);
+        for (auto sei : seia)
+          add ((*this)[sei]);
+      }
+    else
+      for (const auto & el : surfelements)
+        add (el);
+
+    std::lock_guard<std::mutex> lock(preview.mutex);
+    if (fi.IsValid())
+      {
+        int f = fi.Nr0();
+        size_t n = 0;
+        for (size_t i = 0; i < preview.faces.size(); i++)
+          if (preview.faces[i] != f)
+            {
+              preview.faces[n] = preview.faces[i];
+              preview.edges[n] = preview.edges[i];
+              for (int k = 0; k < 9; k++)
+                preview.coords[9*n+k] = preview.coords[9*i+k];
+              n++;
+            }
+        preview.faces.resize(n);
+        preview.edges.resize(n);
+        preview.coords.resize(9*n);
+        preview.reset.push_back (f);
+      }
+    else
+      {
+        preview.coords.clear();
+        preview.faces.clear();
+        preview.edges.clear();
+        preview.reset.clear();
+        preview.reset.push_back (-1);
+      }
+    preview.coords.insert (preview.coords.end(), coords.begin(), coords.end());
+    preview.faces.insert (preview.faces.end(), faces.begin(), faces.end());
+    preview.edges.insert (preview.edges.end(), edges.begin(), edges.end());
   }
 
   void Mesh :: SetSurfaceElement (SurfaceElementIndex sei, const Element2dRef & el)
@@ -843,7 +958,7 @@ namespace netgen
     outfile << "pointelements" << "\n";
     outfile << pointelements.Size() << "\n";
 
-    for (int i = 0; i < pointelements.Size(); i++)
+    for (auto i : pointelements.Range())
       {
         outfile.width(8);
         outfile << pointelements[i].pnum << "  ";
@@ -1922,192 +2037,24 @@ namespace netgen
   {
     static Timer t("Mesh::Archive"); RegionTimer r(t);
 
-#ifdef PARALLEL
     auto comm = GetCommunicator();
     if (archive.IsParallel() && comm.Size() > 1)
-      { // parallel pickling supported only for output archives
-        if (comm.Rank() == 0)
-          archive & dimension;
-
-        // auto rank = comm.Rank();
-        
-        auto & partop = GetParallelTopology();
-        
-        // global enumration of points:
-        // not used now, but will be needed for refined meshes
-        // GridFunciton pickling is not compatible, now
-        // should go to paralleltopology
-        
-        
-        
-        // merge points
-        Array<PointIndex, PointIndex> globnum(points.Size());
-        PointIndex maxglob = PointIndex::INVALID;
-        for (auto pi : Range(points))
+      {
+        // deprecated collective pickling: rank 0 archives the gathered mesh, the others their local part
+        static bool warned = false;
+        if (!warned && comm.Rank() == 0)
           {
-            globnum[pi] = PointIndex::FromNr1(partop.GetGlobalPNum(pi));
-            // globnum[pi] = global_pnums[pi];
-            maxglob = max(globnum[pi], maxglob);
+            PrintWarning("Collective parallel pickling is deprecated, use Mesh.Gather() and pickle the result");
+            warned = true;
           }
-        
-        maxglob = comm.AllReduce (maxglob, NG_MPI_MAX);
-        int numglob = maxglob+1-IndexBASE<PointIndex>();
-        if (comm.Rank() > 0)
-          {
-            comm.Send (globnum, 0, 200);
-            comm.Send (points, 0, 200);
-          }
-        else
-          {
-            Array<PointIndex, PointIndex> globnumi;
-            Array<MeshPoint, PointIndex> pointsi;
-            Array<MeshPoint, PointIndex> globpoints(numglob);
-            for (int j = 1; j < comm.Size(); j++)
-              {
-                comm.Recv (globnumi, j, 200);
-                comm.Recv (pointsi, j, 200);
-                for (auto i : Range(globnumi))
-                  globpoints[globnumi[i]] = pointsi[i];
-              }
-            archive & globpoints;
-          }
-
-        
-        // sending surface elements
-        auto copy_el2d  (surfelements);
-        for (auto el : copy_el2d)
-          for (auto & pi : el.PNums())
-            pi = globnum[pi];
-
-        if (comm.Rank() > 0)
-          {
-            Array<size_t> shape { copy_el2d.Width(), copy_el2d.Size() };
-            comm.Send(FlatArray<size_t>(shape), 0, 200);
-            comm.Send(FlatArray<char>(copy_el2d.Size()*copy_el2d.Stride(), copy_el2d.Data()), 0, 200);
-          }
-        else
-          {
-            for (int j = 1; j < comm.Size(); j++)
-              {
-                Array<size_t> shape(2);
-                comm.Recv(FlatArray<size_t>(shape), j, 200);
-                T_SURFELEMENTS el2di(shape[1], shape[0]);
-                comm.Recv(FlatArray<char>(el2di.Size()*el2di.Stride(), el2di.Data()), j, 200);
-                for (auto el : el2di)
-                  copy_el2d.Append (el);
-              }
-            archive & copy_el2d;
-          }
-
-
-        // sending volume elements
-        auto copy_el3d  (volelements);
-        for (auto el : copy_el3d)
-          for (auto & pi : el.PNums())
-            pi = globnum[pi];
-
-        // strided slots are trivially copyable: send width, size and raw bytes
-        if (comm.Rank() > 0)
-          {
-            Array<size_t> shape { copy_el3d.Width(), copy_el3d.Size() };
-            comm.Send(FlatArray<size_t>(shape), 0, 200);
-            comm.Send(FlatArray<char>(copy_el3d.Size()*copy_el3d.Stride(), copy_el3d.Data()), 0, 200);
-          }
-        else
-          {
-            for (int j = 1; j < comm.Size(); j++)
-              {
-                Array<size_t> shape(2);
-                comm.Recv(FlatArray<size_t>(shape), j, 200);
-                T_VOLELEMENTS el3di(shape[1], shape[0]);
-                comm.Recv(FlatArray<char>(el3di.Size()*el3di.Stride(), el3di.Data()), j, 200);
-                for (auto el : el3di)
-                  copy_el3d.Append (el);
-              }
-            archive & copy_el3d;
-          }
-
-
-        // sending 1D elements
-        auto copy_el1d  (segments);
-        for (auto & el : copy_el1d)
-          for (auto & pi : el.PNums())
-            if (pi != PointIndex(PointIndex::INVALID))
-              pi = globnum[pi];
-
-        if (comm.Rank() > 0)
-          comm.Send(copy_el1d, 0, 200);
-        else
-          {
-            Array<Segment, SegmentIndex> el1di;
-            for (int j = 1; j < comm.Size(); j++)
-              {
-                comm.Recv(el1di, j, 200);
-                for (auto & el : el1di)
-                  copy_el1d += el;
-              }
-            archive & copy_el1d;
-          }
-
-
-        // sending 0D elements
-        auto copy_el0d  (pointelements);
-        for (auto & el : copy_el0d)
-          {
-            auto & pi = el.pnum;
-            if (pi != PointIndex(PointIndex::INVALID))
-              pi = globnum[pi];
-          }
-        
-        if (comm.Rank() > 0)
-          comm.Send(copy_el0d, 0, 200);
-        else
-          {
-            Array<Element0d> el0di;
-            for (int j = 1; j < comm.Size(); j++)
-              {
-                comm.Recv(el0di, j, 200);
-                for (auto & el : el0di)
-                  copy_el0d += el;
-              }
-            archive & copy_el0d;
-          }
-
-
-
-        
+        auto gathered = GatherToRoot();
         if (comm.Rank() == 0)
           {
-            archive & Regions<2>();
-            archive.NeedsVersion("netgen", names_in_descriptors_version);
-            ArchiveRegionNames<3>(archive);
-            ArchiveRegionNames<0>(archive);
-            auto mynv = numglob;
-            archive & mynv;   // numvertices;
-            archive & *ident;
-
-            if(archive.GetVersion("netgen") >= "v6.2.2103-1")
-              {
-                archive.NeedsVersion("netgen", "v6.2.2103-1");
-                archive & vol_partition & surf_partition & seg_partition;
-              }
-            
-            archive.Shallow(geometry);
-            archive & *curvedelems;
-
-            if(archive.GetVersion("netgen") >= "v6.2.2603-26")
-              {
-                archive.NeedsVersion("netgen", "v6.2.2603-26");
-                archive & Regions<1>();
-              }
+            gathered->DoArchive (archive);
+            return;
           }
-        
-        if (comm.Rank() == 0)
-          return;
       }
-#endif
-    
-    
+
     archive & dimension;
     archive & points;
     archive & surfelements;
@@ -4920,7 +4867,7 @@ namespace netgen
           {
             el.GetTransformation (j, Points(), dtrans);
             double det = dtrans.Det();
-            if (det > 0)
+            if (det < 0)
               {
                 PrintError ("Element ", i.Nr1() , " has wrong orientation");
                 el.Flags().badel = 1;
@@ -7556,13 +7503,8 @@ namespace netgen
     static Timer t_call_update_clusters("call update clusters"); t_call_update_clusters.Start();
     clusters->Update();
     t_call_update_clusters.Stop();
-#ifdef PARALLEL
     if (paralleltop)
-      {
-        paralleltop->Reset();
-        paralleltop->UpdateCoarseGrid();
-      }
-#endif
+      paralleltop->UpdateEdgesAndFaces();
     updateSignal.Emit();
   }
 
@@ -7726,12 +7668,11 @@ namespace netgen
     }
 
     // Check in reverse order because they are deleted from the end
-    auto npointelements = mesh.pointelements.Size();
-    for(auto i : Range(npointelements))
+    for (auto pei = mesh.pointelements.Range().Next(); pei-- > mesh.pointelements.Range().First(); )
     {
-      auto pel = mesh.pointelements[npointelements-i-1];
+      auto pel = mesh.pointelements[pei];
       if(!keep_point[pel.pnum])
-        mesh.pointelements.DeleteElement(npointelements-i-1);
+        mesh.pointelements.DeleteElement(pei);
     }
 
     mesh.Compress();
