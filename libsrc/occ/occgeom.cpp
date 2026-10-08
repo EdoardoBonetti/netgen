@@ -6,6 +6,7 @@
 
 #include <mystdlib.h>
 #include <core/register_archive.hpp>
+#include <core/taskmanager.hpp>
 
 #include "occ_vertex.hpp"
 #include "occ_edge.hpp"
@@ -80,10 +81,66 @@ namespace netgen
   };
 
 
-  TopTools_IndexedMapOfShape OCCGeometry::global_shape_property_indices;
-  std::vector<ShapeProperties> OCCGeometry::global_shape_properties;
-  TopTools_IndexedMapOfShape OCCGeometry::global_identification_indices;
-  std::vector<std::vector<OCCIdentification>> OCCGeometry::global_identifications;
+  std::unordered_map<TopoDS_Shape, ShapeProperties, TopTools_ShapeMapHasher, TopTools_ShapeMapHasher> OCCGeometry::global_shape_properties;
+  std::unordered_map<TopoDS_Shape, std::vector<OCCIdentification>, TopTools_ShapeMapHasher, TopTools_ShapeMapHasher> OCCGeometry::global_identifications;
+  std::mutex OCCGeometry::global_shape_mutex;
+  static size_t global_shape_data_size_after_cleanup = 0;
+
+  void OCCGeometry::CleanupGlobalShapeDataIfGrown()
+  {
+    {
+      std::lock_guard<std::mutex> guard(global_shape_mutex);
+      if(global_shape_properties.size() + global_identifications.size()
+         <= 2 * global_shape_data_size_after_cleanup + 1000)
+        return;
+    }
+    CleanupGlobalShapeData();
+  }
+
+  size_t OCCGeometry::CleanupGlobalShapeData()
+  {
+    std::lock_guard<std::mutex> guard(global_shape_mutex);
+    size_t nremoved = 0;
+    while(true)
+      {
+        // a shape is unused if all references to its TShape come from the maps,
+        // removing it can free parents or identified shapes, so repeat
+        std::unordered_map<const TopoDS_TShape*, int> internal;
+        auto count = [&](const TopoDS_Shape & s)
+          {
+            if(!s.IsNull())
+              internal[s.TShape().get()]++;
+          };
+        for(auto & [s, props] : global_shape_properties)
+          count(s);
+        for(auto & [s, idents] : global_identifications)
+          {
+            count(s);
+            for(auto & id : idents)
+              {
+                count(id.from);
+                count(id.to);
+              }
+          }
+        std::set<const TopoDS_TShape*> unused;
+        for(auto [ts, n] : internal)
+          if(ts->GetRefCount() == n)
+            unused.insert(ts);
+        auto is_unused = [&](const auto & entry)
+          { return entry.first.IsNull() || unused.count(entry.first.TShape().get()); };
+        size_t nbefore = global_shape_properties.size() + global_identifications.size();
+        for(auto it = global_shape_properties.begin(); it != global_shape_properties.end();)
+          it = is_unused(*it) ? global_shape_properties.erase(it) : std::next(it);
+        for(auto it = global_identifications.begin(); it != global_identifications.end();)
+          it = is_unused(*it) ? global_identifications.erase(it) : std::next(it);
+        size_t n = nbefore - global_shape_properties.size() - global_identifications.size();
+        if(n == 0)
+          break;
+        nremoved += n;
+      }
+    global_shape_data_size_after_cleanup = global_shape_properties.size() + global_identifications.size();
+    return nremoved;
+  }
 
   TopoDS_Shape ListOfShapes::Max(gp_Vec dir)
   {
@@ -166,6 +223,7 @@ namespace netgen
         BuildFMap();
         CalcBoundingBox();
         PrintContents (this);
+        CleanupGlobalShapeDataIfGrown();
       }
   }
 
@@ -1211,41 +1269,66 @@ namespace netgen
           vertices.Append(std::move(occ_vertex));
       }
 
-      for(auto i1 : Range(1, emap.Extent()+1))
       {
-          auto e = emap(i1);
-          auto edge = TopoDS::Edge(e);
-          auto verts = GetVertices(e);
-          if(verts.size() == 0)
-            continue;
-          auto occ_edge = make_unique<OCCEdge>(edge, GetVertex(verts[0]), GetVertex(verts[1]) );
-          if(HaveProperties(edge))
-            occ_edge->properties = GetProperties(e);
-          edges.Append(std::move(occ_edge));
+          const int ne = emap.Extent();
+          Array<unique_ptr<OCCEdge>> tmp(ne);
+          ParallelFor(ne, [&](size_t i)
+          {
+              auto e = emap(i+1);
+              auto verts = GetVertices(e);
+              if(verts.size() == 0) return;
+              try
+              {
+                  auto occ_edge = make_unique<OCCEdge>(e, GetVertex(verts[0]), GetVertex(verts[1]));
+                  if(HaveProperties(e))
+                      occ_edge->properties = GetProperties(e);
+                  tmp[i] = std::move(occ_edge);
+              }
+              catch(Standard_Failure & ex)
+              {
+                  throw Exception(string("Failed to build OCC edge: ") + ex.GetMessageString());
+              }
+          });
+          for(int i = 0; i < ne; i++)
+              if(tmp[i]) edges.Append(std::move(tmp[i]));
       }
 
-      for(auto i1 : Range(1, fmap.Extent()+1))
       {
-          auto f = fmap(i1);
-
-          auto k = faces.Size();
-          auto occ_face = make_unique<OCCFace>(f);
-
-          for(auto e : GetEdges(f))
-              occ_face->edges.Append( &GetEdge(e) );
-
-          if(HaveProperties(f))
-            occ_face->properties = GetProperties(f);
-          faces.Append(std::move(occ_face));
+          const int nf = fmap.Extent();
+          Array<unique_ptr<OCCFace>> tmp(nf);
+          ParallelFor(nf, [&](size_t i)
+          {
+              auto f = fmap(i+1);
+              try
+              {
+                  auto occ_face = make_unique<OCCFace>(f);
+                  for(auto e : GetEdges(f))
+                      occ_face->edges.Append( &GetEdge(e) );
+                  if(HaveProperties(f))
+                      occ_face->properties = GetProperties(f);
+                  tmp[i] = std::move(occ_face);
+              }
+              catch(Standard_Failure & ex)
+              {
+                  throw Exception(string("Failed to build OCC face: ") + ex.GetMessageString());
+              }
+          });
+          for(int i = 0; i < nf; i++)
+              faces.Append(std::move(tmp[i]));
 
           if(dimension==2)
-              for(auto e : GetEdges(f))
+              for(auto i1 : Range(1, nf+1))
               {
-                  auto & edge = GetEdge(e);
-                  if(e.Orientation() == TopAbs_REVERSED)
-                      edge.domout = k;
-                  else
-                      edge.domin = k;
+                  auto f = fmap(i1);
+                  int k = i1-1;
+                  for(auto e : GetEdges(f))
+                  {
+                      auto & edge = GetEdge(e);
+                      if(e.Orientation() == TopAbs_REVERSED)
+                          edge.domout = k;
+                      else
+                          edge.domin = k;
+                  }
               }
       }
 
@@ -1580,6 +1663,7 @@ namespace netgen
       occgeo->BuildFMap();
       occgeo->CalcBoundingBox();
       PrintContents (occgeo);
+      OCCGeometry::CleanupGlobalShapeDataIfGrown();
   }
 
    // Philippose - 23/02/2009
@@ -1695,6 +1779,7 @@ namespace netgen
 
       occgeo->CalcBoundingBox();
       PrintContents (occgeo);
+      OCCGeometry::CleanupGlobalShapeDataIfGrown();
       return occgeo;
    }
 
@@ -1742,6 +1827,7 @@ namespace netgen
 
       occgeo->CalcBoundingBox();
       PrintContents (occgeo);
+      OCCGeometry::CleanupGlobalShapeDataIfGrown();
 
       return occgeo;
    }
@@ -2422,20 +2508,19 @@ namespace netgen
         auto shapeTool = XCAFDoc_DocumentTool::ShapeTool(step_doc->Main());
 
         // load colors
+        XCAFPrs_IndexedDataMapOfShapeStyle styles;
+        {
+          TDF_LabelSequence roots;
+          shapeTool->GetFreeShapes(roots);
+          for (Standard_Integer ri = 1; ri <= roots.Length(); ri++)
+            XCAFPrs::CollectStyleSettings(roots.Value(ri), TopLoc_Location(), styles);
+        }
         for (auto typ : { TopAbs_SOLID, TopAbs_FACE,  TopAbs_EDGE })
           for (TopExp_Explorer e(shape, typ); e.More(); e.Next())
           {
-            TDF_Label label;
-            shapeTool->Search(e.Current(), label);
-
-            if(label.IsNull())
-                continue;
-
-            XCAFPrs_IndexedDataMapOfShapeStyle set;
-            TopLoc_Location loc;
-            XCAFPrs::CollectStyleSettings(label, loc, set);
             XCAFPrs_Style aStyle;
-            set.FindFromKey(e.Current(), aStyle);
+            if(!styles.FindFromKey(e.Current(), aStyle))
+                continue;
             if(aStyle.IsSetColorSurf())
               {
                 for(TopExp_Explorer e2(e.Current(), TopAbs_FACE); e2.More(); e2.Next())
