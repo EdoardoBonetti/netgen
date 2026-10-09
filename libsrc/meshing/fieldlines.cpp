@@ -372,10 +372,21 @@ namespace netgen
     int startelnr = GetVolElement(mesh, startpoint,startlami);
     if (startelnr == -1)
       return;
-      
+
+    auto eval = [&](int el, const double * lam, Vec<3> & vec, double & val)
+    {
+      if(valuefunc)
+        return valuefunc(el, lam, vec, val);
+      bool ok = func(el, lam, vec);
+      val = vec.Length();
+      return ok;
+    };
 
     Vec<3> startv;
-    bool startdraw = func(startelnr, startlami, startv);
+    double startvalue;
+    bool startdraw = eval(startelnr, startlami, startv, startvalue);
+    if(line_field && !startdraw)
+      return;
 
     double startval = startv.Length();
 
@@ -391,19 +402,23 @@ namespace netgen
         if(dir*direction < 0) continue;
           
         points.Append(startpoint);
-        vals.Append(startval);
+        vals.Append(startvalue);
         drawelems.Append(startdraw);
           
         double h = 0.001*rad/startval; // otherwise no nice lines; should be made accessible from outside
         
         v = startv;
         if(dir == -1) v *= -1.;
+        Vec<3> vref = v;          // line-field mode: the direction the line is going
+        // line-field mode: lengths are measured in the line parameter (the proper length for
+        // metric-unit eigenvectors), otherwise in the length of the vector field as before
+        double speed = line_field ? 1.0 : startval;
 
         int elnr = startelnr;
         double lami[3] = { startlami[0], startlami[1], startlami[2]}; 
           
 
-        for(double length = 0; length < maxlength; length += h*vals.Last())
+        for(double length = 0; length < maxlength; length += h*speed)
           {
             if(v.Length() < 1e-12*rad)
               {
@@ -414,6 +429,8 @@ namespace netgen
             stepper.StartNextValCalc(points.Last(),dummyt,h,true);
             stepper.FeedNextF(v);
             bool drawelem = false;
+            bool stop = false;
+            double value = 0;
 
             Point<3> newp;
             while(!stepper.GetNextData(newp,dummyt,h) && elnr != -1)
@@ -421,21 +438,28 @@ namespace netgen
                 elnr = GetVolElementHinted(mesh, newp, lami, elnr);
                 if(elnr != -1)
                   {
-                    drawelem = func(elnr, lami, v);
-                    if(dir == -1) v *= -1.;
+                    drawelem = eval(elnr, lami, v, value);
+                    if(line_field)
+                      {
+                        if(!drawelem) { stop = true; break; }
+                        if(v * vref < 0) v *= -1.;
+                      }
+                    else if(dir == -1) v *= -1.;
                     stepper.FeedNextF(v);
                   }
               }
 
-            if (elnr == -1)
+            if (elnr == -1 || stop)
               {
                 //cout << "direction " <<dir << " reached the wall." << endl;
                 break;
               }
 
             points.Append(newp);
-            vals.Append(v.Length());
+            vals.Append(value);
             drawelems.Append(drawelem);
+            vref = v;
+            speed = line_field ? 1.0 : v.Length();
 
             if(maxpoints > 0 && points.Size() >= maxpoints)
               {

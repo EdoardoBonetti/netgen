@@ -54,8 +54,16 @@ private:
   const Mesh & mesh;
 
   typedef std::function<bool (int elnr, const double *, Vec<3> &)> VectorFunction;
+  // also returns the value drawn on the line (default: the length of the vector)
+  typedef std::function<bool (int elnr, const double *, Vec<3> &, double &)> VectorValueFunction;
 
   const VectorFunction & func;
+  VectorValueFunction valuefunc;   // used instead of func when set
+
+  // Line-field mode, for fields that have a direction but no orientation, such as eigenvector
+  // fields (tendex and vortex lines): every vector is flipped to continue the direction of the
+  // line, and a line ends where the function returns false (e.g. degenerate eigenvalues).
+  bool line_field = false;
   RKStepper stepper;
 
   // remembered so that each thread can build its own stepper: RKStepper
@@ -89,6 +97,9 @@ public:
   DLL_HEADER ~FieldLineCalc();
 
   void SetCriticalValue(const double val) { critical_value = val; }
+
+  void SetValueFunction(VectorValueFunction f) { valuefunc = std::move(f); }
+  void SetLineField(bool b) { line_field = b; }
 
   void Randomized(void) { randomized = true; }
   void NotRandomized(void) { randomized = false; }
