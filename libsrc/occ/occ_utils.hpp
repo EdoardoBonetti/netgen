@@ -26,6 +26,18 @@
 #define NETGEN_OCC_VERSION_AT_LEAST_MAJOR(MAJOR) \
   (NETGEN_OCC_VERSION_AT_LEAST(MAJOR, 0))
 
+// TopTools_ShapeMapHasher is a std-style hasher only since OCC 7.8
+#if NETGEN_OCC_VERSION_AT_LEAST(7, 8)
+using NgShapeMapHasher = TopTools_ShapeMapHasher;
+#else
+#include <climits>
+struct NgShapeMapHasher
+{
+  size_t operator()(const TopoDS_Shape& s) const { return s.HashCode(INT_MAX); }
+  bool operator()(const TopoDS_Shape& a, const TopoDS_Shape& b) const { return a.IsSame(b); }
+};
+#endif
+
 // #pragma clang diagnostic pop
 
 #include "meshing.hpp"
