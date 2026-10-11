@@ -1764,7 +1764,8 @@ py::arg("point_tolerance") = -1.)
            {
             std::lock_guard<std::mutex> meshlock (self.MajorMutex());
             Refinement & ref = const_cast<Refinement&> (self.GetGeometry()->GetRefinement());
-            ::netgen::HPRefinement (self, &ref, SPLIT_ALFELD, 1, 0.5, true, true);
+            // the new vertex is at (1-dim*fac) p0 + fac (p1+...+pdim): the barycentre needs fac = 1/(dim+1)
+            ::netgen::HPRefinement (self, &ref, SPLIT_ALFELD, 1, 1.0 / (self.GetDimension()+1), true, true);
            }
            ), py::call_guard<py::gil_scoped_release>())
     .def ("SplitPowellSabin", FunctionPointer
@@ -1772,6 +1773,7 @@ py::arg("point_tolerance") = -1.)
            {
             std::lock_guard<std::mutex> meshlock (self.MajorMutex());
             Refinement & ref = const_cast<Refinement&> (self.GetGeometry()->GetRefinement());
+            // edge points at the midpoints (fac = 0.5), the face point at the barycentre (min(1/3, fac))
             ::netgen::HPRefinement (self, &ref, SPLIT_POWELL, 1, 0.5, true, true);
            }
            ), py::call_guard<py::gil_scoped_release>())
