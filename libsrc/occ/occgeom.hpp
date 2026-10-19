@@ -151,8 +151,8 @@ namespace netgen
     Point<3> center;
     OCCParameters occparam;
   public:
-    static std::unordered_map<TopoDS_Shape, ShapeProperties, TopTools_ShapeMapHasher, TopTools_ShapeMapHasher> global_shape_properties;
-    static std::unordered_map<TopoDS_Shape, std::vector<OCCIdentification>, TopTools_ShapeMapHasher, TopTools_ShapeMapHasher> global_identifications;
+    static std::unordered_map<TopoDS_Shape, ShapeProperties, ShapeHasher, ShapeHasher> global_shape_properties;
+    static std::unordered_map<TopoDS_Shape, std::vector<OCCIdentification>, ShapeHasher, ShapeHasher> global_identifications;
     static std::mutex global_shape_mutex;
 
     static ShapeProperties& GetProperties(const TopoDS_Shape& shape)
@@ -294,6 +294,11 @@ namespace netgen
     bool MeshFace(Mesh& mesh, const MeshingParameters& mparam,
                      int nr, FlatArray<int, PointIndex> glob2loc) const override;
     // void OptimizeSurface(Mesh& mesh, const MeshingParameters& mparam) const override {}
+    double BentEdgeAngle(const MeshingParameters& mparam) const override
+    {
+      if (mparam.curvaturesafety <= 0) return 0;
+      return min (max (1.0 / mparam.curvaturesafety, M_PI/3), 0.5*M_PI);
+    }
  
     void Save (const filesystem::path & filename) const override;
     void SaveToMeshFile (ostream & /* ost */) const override;

@@ -1258,17 +1258,27 @@ namespace netgen
     }
 
 
+    if (topology.NeedsUpdate())
+      const_cast<MeshTopology&>(topology).Update();
+    if (!topology.HasCanonicalNumbering())
+      {
+        auto e2v = topology.GetEdge2Vert();
+        outfile << "topology_edges" << endl << e2v.Size() << endl;
+        for (auto & e : e2v)
+          outfile << e[0].Nr1() << " " << e[1].Nr1() << endl;
+        auto f2v = topology.GetFace2Vert();
+        outfile << "topology_faces" << endl << f2v.Size() << endl;
+        for (auto & f : f2v)
+          outfile << f[0].Nr1() << " " << f[1].Nr1() << " " << f[2].Nr1() << " "
+                  << (f[3].IsValid() ? f[3].Nr1() : 0) << endl;
+      }
+
     if (curvedelems && curvedelems->IsHighOrder())
       {
-        if (level_nv.Size() > 1 && (MeshTopology().HasParentEdges() || MeshTopology().HasParentFaces()))
-          cerr << "Waring: cannot store curvedelements on refined meshes with full hierarchy" << endl;
-        else
-          {
-            outfile << "curvedelements" << endl;
-            shared_ptr<std::ostream> spoutfile(&outfile,  [](void*) noexcept {});
-            TextOutArchive out(std::move(spoutfile));
-            out & (*curvedelems);
-          }
+        outfile << "curvedelements" << endl;
+        shared_ptr<std::ostream> spoutfile(&outfile,  [](void*) noexcept {});
+        TextOutArchive out(std::move(spoutfile));
+        out & (*curvedelems);
       }
 
 
@@ -1368,6 +1378,7 @@ namespace netgen
     Array<int, SegmentIndex> seg_edgenrs;
     Array<int, SegmentIndex> seg_sis;
     Array<string> bcnames2d;
+    Array<std::array<PointIndex,2>, EdgeIndex> topo_edges;
     
 
     while (infile.good() && !endmesh)
@@ -1919,6 +1930,32 @@ namespace netgen
               }
           }
         
+        if (strcmp (str, "topology_edges") == 0)
+          {
+            infile >> n;
+            topo_edges.SetSize(n);
+            for (auto & e : topo_edges)
+              {
+                int p0, p1;
+                infile >> p0 >> p1;
+                e = { PointIndex::FromNr1(p0), PointIndex::FromNr1(p1) };
+              }
+          }
+
+        if (strcmp (str, "topology_faces") == 0)
+          {
+            infile >> n;
+            Array<std::array<PointIndex,4>, FaceIndex> topo_faces(n);
+            for (auto & f : topo_faces)
+              {
+                int pn[4];
+                infile >> pn[0] >> pn[1] >> pn[2] >> pn[3];
+                for (int j = 0; j < 4; j++)
+                  f[j] = pn[j] > 0 ? PointIndex::FromNr1(pn[j]) : PointIndex(PointIndex::INVALID);
+              }
+            topology.SetNumbering (std::move(topo_edges), std::move(topo_faces));
+          }
+
         if (strcmp (str, "curvedelements") == 0)              
           {
             topology.Update();
@@ -2108,6 +2145,9 @@ namespace netgen
         archive.NeedsVersion("netgen", "v6.2.2603-26");
         archive & Regions<1>();
       }
+
+    if (archive.HasFormat(1))
+      archive & topology;
 
     if (archive.Input())
       {
@@ -4638,6 +4678,86 @@ namespace netgen
 
     //  FindOpenElements();
     timestamp = NextTimeStamp();
+  }
+
+  Array<PointIndex, PointIndex> Mesh :: IdentificationRepresentatives (bool layers) const
+  {
+    Array<PointIndex, PointIndex> rep(GetNP());
+    for (PointIndex pi : points.Range())
+      rep[pi] = pi;
+    auto find = [&] (PointIndex pi)
+    {
+      while (rep[pi] != pi)
+        pi = rep[pi] = rep[rep[pi]];
+      return pi;
+    };
+    auto & idents = const_cast<Mesh&>(*this).GetIdentifications();
+    for (auto [pair, nr] : idents.GetPairs())
+      if (idents.GetType(nr) == Identifications::PERIODIC ||
+          (layers && (idents.GetType(nr) == Identifications::CLOSESURFACES ||
+                      idents.GetType(nr) == Identifications::CLOSEEDGES ||
+                      idents.GetType(nr) == Identifications::OFFSET_POINT)))
+        {
+          auto r0 = find(pair[0]), r1 = find(pair[1]);
+          if (r0 < r1) rep[r1] = r0;
+          if (r1 < r0) rep[r0] = r1;
+        }
+    for (PointIndex pi : points.Range())
+      rep[pi] = find(pi);
+    return rep;
+  }
+
+  void Mesh :: ConsistentIdentificationOrdering ()
+  {
+    static Timer t("Mesh::ConsistentIdentificationOrdering"); RegionTimer reg(t);
+    if (GetCommunicator().Size() > 1)
+      throw NgException ("ConsistentIdentificationOrdering not supported for distributed meshes");
+    if (level_nv.Size() > 1 || hpelements)
+      throw NgException ("ConsistentIdentificationOrdering only for unrefined meshes, refinement keeps consistency");
+    if (curvedelems->IsHighOrder())
+      throw NgException ("ConsistentIdentificationOrdering must be called before curving");
+
+    // layer classes contain periodic classes, number both consecutively
+    auto rep = IdentificationRepresentatives();
+    auto repc = IdentificationRepresentatives(true);
+    Array<PointIndex> order(GetNP());
+    for (auto i : Range(order))
+      order[i] = PointIndex::FromNr0(i);
+    QuickSort (order, [&] (PointIndex a, PointIndex b)
+               {
+                 return std::make_tuple (repc[a], rep[a], a) < std::make_tuple (repc[b], rep[b], b);
+               });
+
+    Array<PointIndex, PointIndex> op2np(GetNP());
+    bool identity = true;
+    for (auto i : Range(order))
+      {
+        op2np[order[i]] = PointIndex::FromNr0(i);
+        if (order[i] != PointIndex::FromNr0(i)) identity = false;
+      }
+    if (identity) return;
+
+    T_POINTS hpoints(points);
+    for (PointIndex pi : points.Range())
+      points[op2np[pi]] = hpoints[pi];
+    for (auto el : volelements)
+      for (PointIndex & pi : el.PNums())
+        pi = op2np[pi];
+    for (Element2dRef el : surfelements)
+      for (PointIndex & pi : el.PNums())
+        pi = op2np[pi];
+    for (Segment & seg : segments)
+      for (int j = 0; j < seg.GetNP(); j++)
+        seg[j] = op2np[seg[j]];
+    for (auto & pe : pointelements)
+      pe.pnum = op2np[pe.pnum];
+    GetIdentifications().MapPoints(op2np);
+
+    CalcSurfacesOfNode();
+    ComputeNVertices();
+    topology.ClearEdges();
+    topology.ClearFaces();
+    SetNextMajorTimeStamp();
   }
 
   void Mesh :: OrderElements()

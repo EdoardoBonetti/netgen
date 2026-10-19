@@ -632,7 +632,6 @@ double MeshOptimize3d :: SplitImproveEdge (Table<ElementIndex,PointIndex> & elem
           }
         }
 
-      if (!mesh.LegalTet (oldel)) return 0.0;
       if (!mesh.LegalTet (newel1)) return 0.0;
       if (!mesh.LegalTet (newel2)) return 0.0;
 
@@ -2431,7 +2430,7 @@ void MeshOptimize3d :: SwapImprove2 (bool conform_segments)
   // double bad1, bad2;
 
   int np = mesh.GetNP();
-  int ne = mesh.GetNE();
+  // int ne = mesh.GetNE();
   int nse = mesh.GetNSE();
 
   // contains at least all elements at node
